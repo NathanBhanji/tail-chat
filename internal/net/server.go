@@ -14,10 +14,18 @@ const DefaultPort = 9377
 
 // Connection represents an established, authenticated peer connection.
 type Connection struct {
-	Conn         net.Conn
-	PeerHostname string
+	Conn          net.Conn
+	PeerHostname  string
 	PeerPublicKey [32]byte
-	SharedSecret [32]byte
+	SharedSecret  [32]byte
+	writeMu       sync.Mutex
+}
+
+// WriteMessage writes a protocol envelope to the connection with proper serialization.
+func (c *Connection) WriteMessage(env *protocol.Envelope) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return protocol.WriteMessage(c.Conn, env)
 }
 
 // Server listens for incoming peer connections.
@@ -154,7 +162,11 @@ func (s *Server) readLoop(c *Connection) {
 	defer func() {
 		c.Conn.Close()
 		s.mu.Lock()
-		delete(s.conns, c.PeerHostname)
+		// Only remove if this connection is still the active one for this peer.
+		// A newer connection may have replaced us in the map.
+		if current, ok := s.conns[c.PeerHostname]; ok && current == c {
+			delete(s.conns, c.PeerHostname)
+		}
 		s.mu.Unlock()
 	}()
 

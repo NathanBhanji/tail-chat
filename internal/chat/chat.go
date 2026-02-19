@@ -129,7 +129,7 @@ func (m *Manager) handleChatMessage(c *tcnet.Connection, env *protocol.Envelope)
 	// Send ack
 	ack := &protocol.Ack{MessageID: chatMsg.ID}
 	ackEnv, _ := protocol.Wrap(protocol.TypeAck, ack)
-	protocol.WriteMessage(c.Conn, ackEnv)
+	c.WriteMessage(ackEnv)
 
 	if m.onMessage != nil {
 		m.onMessage(chatKey, msg)
@@ -156,7 +156,7 @@ func (m *Manager) systemMessage(chatKey, text string) {
 func (m *Manager) handlePing(c *tcnet.Connection) {
 	pong := &protocol.Pong{Timestamp: time.Now().UnixNano()}
 	env, _ := protocol.Wrap(protocol.TypePong, pong)
-	protocol.WriteMessage(c.Conn, env)
+	c.WriteMessage(env)
 }
 
 func (m *Manager) handleGroupInvite(c *tcnet.Connection, env *protocol.Envelope) {

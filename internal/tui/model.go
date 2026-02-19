@@ -51,6 +51,12 @@ type PeerConnectMsg struct {
 	Hostname string
 }
 
+// MessageSentMsg is sent after an async send completes.
+type MessageSentMsg struct {
+	ChatKey string
+	Err     error
+}
+
 // ErrorMsg is a transient error to display.
 type ErrorMsg struct {
 	Err error
@@ -143,6 +149,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PeerConnectMsg:
 		// A peer connected inbound — refresh so the lock icon shows up
+		return m, nil
+
+	case MessageSentMsg:
+		if msg.Err != nil {
+			m.err = msg.Err.Error()
+			m.errExpiry = time.Now().Add(3 * time.Second)
+		}
+		if m.view == ViewChat && msg.ChatKey == m.activeChatKey {
+			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
+		}
 		return m, nil
 
 	case PeersUpdatedMsg:
@@ -354,22 +370,19 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.input.SetValue("")
 
+		// Send async so the TCP write doesn't block the UI
 		chatKey := m.activeChatKey
-		if strings.HasPrefix(chatKey, "group:") {
-			groupID := strings.TrimPrefix(chatKey, "group:")
-			if err := m.chatMgr.SendGroupMessage(groupID, content); err != nil {
-				m.err = err.Error()
-				m.errExpiry = time.Now().Add(3 * time.Second)
+		chatMgr := m.chatMgr
+		return m, func() tea.Msg {
+			var err error
+			if strings.HasPrefix(chatKey, "group:") {
+				groupID := strings.TrimPrefix(chatKey, "group:")
+				err = chatMgr.SendGroupMessage(groupID, content)
+			} else {
+				err = chatMgr.SendMessage(chatKey, content)
 			}
-		} else {
-			if err := m.chatMgr.SendMessage(chatKey, content); err != nil {
-				m.err = err.Error()
-				m.errExpiry = time.Now().Add(3 * time.Second)
-			}
+			return MessageSentMsg{ChatKey: chatKey, Err: err}
 		}
-
-		m.messages = m.chatMgr.GetMessages(m.activeChatKey)
-		return m, nil
 	}
 
 	// Pass to text input

@@ -75,10 +75,11 @@ func Connect(addr string, kp *crypto.KeyPair, hostname string) (*Connection, err
 }
 
 // SendEncrypted encrypts and sends a chat message over a connection.
+// It is safe for concurrent use.
 func SendEncrypted(c *Connection, msgType protocol.MessageType, msg any) error {
 	env, err := protocol.Wrap(msgType, msg)
 	if err != nil {
 		return fmt.Errorf("wrap message: %w", err)
 	}
-	return protocol.WriteMessage(c.Conn, env)
+	return c.WriteMessage(env)
 }
