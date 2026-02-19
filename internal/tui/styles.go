@@ -202,4 +202,25 @@ var (
 	fileIcon = lipgloss.NewStyle().
 			Foreground(secondary).
 			Bold(true)
+
+	// Sidebar focus indicators
+	sidebarFocused = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(primary).
+			Padding(0, 1)
+
+	sidebarBlurred = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(muted).
+			Padding(0, 1)
+
+	chatFocused = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(primary).
+			Padding(0, 1)
+
+	chatBlurred = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(muted).
+			Padding(0, 1)
 )

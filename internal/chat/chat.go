@@ -1,9 +1,12 @@
 package chat
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -71,6 +74,20 @@ type Group struct {
 	Members []string
 }
 
+// fileChunkSize is the raw bytes per FileData chunk (64KB).
+const fileChunkSize = 64 * 1024
+
+// fileTransfer tracks an in-progress incoming file transfer.
+type fileTransfer struct {
+	chatKey  string
+	msgID    string
+	filename string
+	size     int64
+	checksum string // expected SHA-256 hex
+	file     *os.File
+	received int64
+}
+
 // Manager coordinates chat sessions, message encryption, and delivery.
 type Manager struct {
 	mu            sync.RWMutex
@@ -81,8 +98,9 @@ type Manager struct {
 	groups        map[string]*Group
 	unread        map[string]int
 	typing        map[string]time.Time
-	peerStatus map[string]string
-	store      *storage.Store
+	peerStatus    map[string]string
+	store         *storage.Store
+	activeTransfers map[string]*fileTransfer // transfer ID -> state
 	onMessage     func(chatKey string, msg Message)
 	onGroupInvite func(invite *protocol.GroupInvite, from string)
 	onPeerConnect func(hostname string)
@@ -108,6 +126,7 @@ func NewManager(server *tcnet.Server, kp *crypto.KeyPair, hostname string, store
 		typing:           make(map[string]time.Time),
 		peerStatus:       make(map[string]string),
 		store:            store,
+		activeTransfers:  make(map[string]*fileTransfer),
 		reconnectTargets: make(map[string]string),
 		reconnectStop:    make(chan struct{}),
 	}
@@ -121,7 +140,6 @@ func NewManager(server *tcnet.Server, kp *crypto.KeyPair, hostname string, store
 	}
 
 	go m.reconnectLoop()
-	m.startFileReceiver()
 
 	return m
 }
@@ -283,6 +301,12 @@ func (m *Manager) handleMessage(c *tcnet.Connection, env *protocol.Envelope) {
 		m.handleStatusMsg(c, env)
 	case protocol.TypeReadReceipt:
 		m.handleReadReceipt(c, env)
+	case protocol.TypeFileOffer:
+		m.handleFileOffer(c, env)
+	case protocol.TypeFileData:
+		m.handleFileData(c, env)
+	case protocol.TypeFileComplete:
+		m.handleFileComplete(c, env)
 	}
 }
 
@@ -677,10 +701,10 @@ func (m *Manager) IsTyping(chatKey string) bool {
 	return time.Since(t) < 3*time.Second
 }
 
-// SendFile sends a file to a peer via Taildrop (tailscale file cp).
-// It creates a placeholder message immediately and updates it when the transfer completes.
+// SendFile sends a file to a peer (or group) over the encrypted TCP connection.
+// It creates a placeholder message immediately and streams the file data async.
 // Returns the message ID for tracking.
-func (m *Manager) SendFile(peerHostname, filePath string) (string, error) {
+func (m *Manager) SendFile(chatKey, filePath string) (string, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return "", fmt.Errorf("stat file: %w", err)
@@ -689,7 +713,21 @@ func (m *Manager) SendFile(peerHostname, filePath string) (string, error) {
 		return "", fmt.Errorf("cannot send a directory")
 	}
 
+	// Compute SHA-256 checksum
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("open file: %w", err)
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		f.Close()
+		return "", fmt.Errorf("hash file: %w", err)
+	}
+	f.Close()
+	checksum := hex.EncodeToString(h.Sum(nil))
+
 	msgID := uuid.New().String()
+	transferID := uuid.New().String()
 	msg := Message{
 		ID:        msgID,
 		Sender:    m.hostname,
@@ -705,45 +743,306 @@ func (m *Manager) SendFile(peerHostname, filePath string) (string, error) {
 	}
 
 	m.mu.Lock()
-	m.messages[peerHostname] = append(m.messages[peerHostname], msg)
-	m.persistMessages(peerHostname)
+	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.persistMessages(chatKey)
 	m.mu.Unlock()
 
 	if m.onMessage != nil {
-		m.onMessage(peerHostname, msg)
+		m.onMessage(chatKey, msg)
 	}
 
-	// Run taildrop async
-	go m.runTaildrop(peerHostname, filePath, msgID)
+	go m.sendFileData(chatKey, filePath, msgID, transferID, checksum, info.Size())
 
 	return msgID, nil
 }
 
-func (m *Manager) runTaildrop(peerHostname, filePath, msgID string) {
-	cmd := exec.Command("tailscale", "file", "cp", filePath, peerHostname+":")
-	out, err := cmd.CombinedOutput()
-
-	m.mu.Lock()
-	for i, msg := range m.messages[peerHostname] {
-		if msg.ID == msgID && msg.FileInfo != nil {
-			if err != nil {
-				m.messages[peerHostname][i].FileInfo.State = FileFailed
-				m.messages[peerHostname][i].FileInfo.Error = strings.TrimSpace(string(out))
-				if m.messages[peerHostname][i].FileInfo.Error == "" {
-					m.messages[peerHostname][i].FileInfo.Error = err.Error()
+func (m *Manager) sendFileData(chatKey, filePath, msgID, transferID, checksum string, size int64) {
+	// Determine connections to send to
+	var conns []*tcnet.Connection
+	if strings.HasPrefix(chatKey, "group:") {
+		groupID := strings.TrimPrefix(chatKey, "group:")
+		m.mu.RLock()
+		group := m.groups[groupID]
+		m.mu.RUnlock()
+		if group != nil {
+			for _, member := range group.Members {
+				if member == m.hostname {
+					continue
 				}
-			} else {
-				m.messages[peerHostname][i].FileInfo.State = FileSent
-				m.messages[peerHostname][i].State = StateDelivered
+				if c := m.server.GetConnection(member); c != nil {
+					conns = append(conns, c)
+				}
 			}
-			m.persistMessages(peerHostname)
+		}
+	} else {
+		if c := m.server.GetConnection(chatKey); c != nil {
+			conns = append(conns, c)
+		}
+	}
+
+	if len(conns) == 0 {
+		m.updateFileSendState(chatKey, msgID, FileFailed, "not connected")
+		return
+	}
+
+	// Send FileOffer
+	offer := &protocol.FileOffer{
+		ID:       transferID,
+		Filename: filepath.Base(filePath),
+		Size:     size,
+		Checksum: checksum,
+		ChatKey:  chatKey,
+	}
+	offerEnv, _ := protocol.Wrap(protocol.TypeFileOffer, offer)
+	for _, c := range conns {
+		c.WriteMessage(offerEnv)
+	}
+
+	// Stream file chunks
+	f, err := os.Open(filePath)
+	if err != nil {
+		m.updateFileSendState(chatKey, msgID, FileFailed, err.Error())
+		return
+	}
+	defer f.Close()
+
+	buf := make([]byte, fileChunkSize)
+	var offset int64
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			encoded := base64.StdEncoding.EncodeToString(buf[:n])
+			chunk := &protocol.FileData{
+				ID:     transferID,
+				Offset: offset,
+				Data:   encoded,
+			}
+			chunkEnv, _ := protocol.Wrap(protocol.TypeFileData, chunk)
+			for _, c := range conns {
+				if writeErr := c.WriteMessage(chunkEnv); writeErr != nil {
+					m.updateFileSendState(chatKey, msgID, FileFailed, writeErr.Error())
+					return
+				}
+			}
+			offset += int64(n)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			m.updateFileSendState(chatKey, msgID, FileFailed, readErr.Error())
+			return
+		}
+	}
+
+	// Send FileComplete
+	complete := &protocol.FileComplete{ID: transferID}
+	completeEnv, _ := protocol.Wrap(protocol.TypeFileComplete, complete)
+	for _, c := range conns {
+		c.WriteMessage(completeEnv)
+	}
+
+	m.updateFileSendState(chatKey, msgID, FileSent, "")
+}
+
+func (m *Manager) updateFileSendState(chatKey, msgID string, state FileState, errMsg string) {
+	m.mu.Lock()
+	for i, msg := range m.messages[chatKey] {
+		if msg.ID == msgID && msg.FileInfo != nil {
+			m.messages[chatKey][i].FileInfo.State = state
+			if errMsg != "" {
+				m.messages[chatKey][i].FileInfo.Error = errMsg
+			}
+			if state == FileSent {
+				m.messages[chatKey][i].State = StateDelivered
+			}
+			m.persistMessages(chatKey)
 			break
 		}
 	}
 	m.mu.Unlock()
 
 	if m.onMessage != nil {
-		m.onMessage(peerHostname, Message{ID: msgID})
+		m.onMessage(chatKey, Message{ID: msgID})
+	}
+}
+
+// handleFileOffer processes an incoming file offer from a peer.
+func (m *Manager) handleFileOffer(c *tcnet.Connection, env *protocol.Envelope) {
+	offer, err := protocol.Unwrap[protocol.FileOffer](env)
+	if err != nil {
+		return
+	}
+
+	// Determine the chat key — use sender hostname for DMs
+	chatKey := c.PeerHostname
+	if strings.HasPrefix(offer.ChatKey, "group:") {
+		chatKey = offer.ChatKey
+	}
+
+	// Create temp file for receiving data
+	home, _ := os.UserHomeDir()
+	dlDir := filepath.Join(home, "Downloads", "tailchat")
+	os.MkdirAll(dlDir, 0700)
+
+	tmpFile, err := os.CreateTemp(dlDir, ".tailchat-recv-*")
+	if err != nil {
+		m.systemMessage(chatKey, fmt.Sprintf("[file receive failed: %v]", err))
+		return
+	}
+
+	msgID := uuid.New().String()
+	msg := Message{
+		ID:        msgID,
+		Sender:    c.PeerHostname,
+		Content:   offer.Filename,
+		Timestamp: time.Now(),
+		IsOwn:     false,
+		State:     StateDelivered,
+		FileInfo: &FileInfo{
+			Filename: offer.Filename,
+			Size:     offer.Size,
+			State:    FileSending, // receiving in progress
+		},
+	}
+
+	m.mu.Lock()
+	m.activeTransfers[offer.ID] = &fileTransfer{
+		chatKey:  chatKey,
+		msgID:    msgID,
+		filename: offer.Filename,
+		size:     offer.Size,
+		checksum: offer.Checksum,
+		file:     tmpFile,
+	}
+	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.unread[chatKey]++
+	m.persistMessages(chatKey)
+	m.mu.Unlock()
+
+	if m.onMessage != nil {
+		m.onMessage(chatKey, msg)
+	}
+}
+
+// handleFileData processes an incoming chunk of file data.
+func (m *Manager) handleFileData(_ *tcnet.Connection, env *protocol.Envelope) {
+	data, err := protocol.Unwrap[protocol.FileData](env)
+	if err != nil {
+		return
+	}
+
+	m.mu.RLock()
+	ft, ok := m.activeTransfers[data.ID]
+	m.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(data.Data)
+	if err != nil {
+		return
+	}
+
+	if _, err := ft.file.WriteAt(decoded, data.Offset); err != nil {
+		return
+	}
+
+	m.mu.Lock()
+	ft.received += int64(len(decoded))
+	m.mu.Unlock()
+}
+
+// handleFileComplete finalises an incoming file transfer.
+func (m *Manager) handleFileComplete(_ *tcnet.Connection, env *protocol.Envelope) {
+	complete, err := protocol.Unwrap[protocol.FileComplete](env)
+	if err != nil {
+		return
+	}
+
+	m.mu.Lock()
+	ft, ok := m.activeTransfers[complete.ID]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	delete(m.activeTransfers, complete.ID)
+	m.mu.Unlock()
+
+	ft.file.Close()
+
+	// Verify checksum
+	f, err := os.Open(ft.file.Name())
+	if err != nil {
+		m.updateFileRecvState(ft, FileFailed, "cannot reopen file")
+		os.Remove(ft.file.Name())
+		return
+	}
+	h := sha256.New()
+	io.Copy(h, f)
+	f.Close()
+	got := hex.EncodeToString(h.Sum(nil))
+
+	if got != ft.checksum {
+		m.updateFileRecvState(ft, FileFailed, "checksum mismatch")
+		os.Remove(ft.file.Name())
+		return
+	}
+
+	// Move to final location
+	home, _ := os.UserHomeDir()
+	dlDir := filepath.Join(home, "Downloads", "tailchat")
+	finalPath := filepath.Join(dlDir, ft.filename)
+
+	// Conflict resolution: add suffix if file exists
+	if _, err := os.Stat(finalPath); err == nil {
+		ext := filepath.Ext(ft.filename)
+		base := strings.TrimSuffix(ft.filename, ext)
+		for i := 1; ; i++ {
+			finalPath = filepath.Join(dlDir, fmt.Sprintf("%s(%d)%s", base, i, ext))
+			if _, err := os.Stat(finalPath); os.IsNotExist(err) {
+				break
+			}
+		}
+	}
+
+	if err := os.Rename(ft.file.Name(), finalPath); err != nil {
+		m.updateFileRecvState(ft, FileFailed, err.Error())
+		os.Remove(ft.file.Name())
+		return
+	}
+
+	// Update message state
+	m.mu.Lock()
+	for i, msg := range m.messages[ft.chatKey] {
+		if msg.ID == ft.msgID && msg.FileInfo != nil {
+			m.messages[ft.chatKey][i].FileInfo.State = FileReceived
+			m.messages[ft.chatKey][i].FileInfo.Path = finalPath
+			m.persistMessages(ft.chatKey)
+			break
+		}
+	}
+	m.mu.Unlock()
+
+	if m.onMessage != nil {
+		m.onMessage(ft.chatKey, Message{ID: ft.msgID})
+	}
+}
+
+func (m *Manager) updateFileRecvState(ft *fileTransfer, state FileState, errMsg string) {
+	m.mu.Lock()
+	for i, msg := range m.messages[ft.chatKey] {
+		if msg.ID == ft.msgID && msg.FileInfo != nil {
+			m.messages[ft.chatKey][i].FileInfo.State = state
+			m.messages[ft.chatKey][i].FileInfo.Error = errMsg
+			m.persistMessages(ft.chatKey)
+			break
+		}
+	}
+	m.mu.Unlock()
+
+	if m.onMessage != nil {
+		m.onMessage(ft.chatKey, Message{ID: ft.msgID})
 	}
 }
 
@@ -763,88 +1062,6 @@ func (m *Manager) UpdateFileState(chatKey, msgID string, state FileState, errMsg
 	m.mu.Unlock()
 }
 
-// startFileReceiver runs a background goroutine that watches for incoming Taildrop files.
-func (m *Manager) startFileReceiver() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	dlDir := filepath.Join(home, "Downloads", "tailchat")
-	os.MkdirAll(dlDir, 0700)
-
-	go func() {
-		for {
-			select {
-			case <-m.reconnectStop:
-				return
-			default:
-			}
-
-			cmd := exec.Command("tailscale", "file", "get", "--wait", "--conflict=rename", dlDir)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				// Check if we're shutting down
-				select {
-				case <-m.reconnectStop:
-					return
-				default:
-				}
-				// If tailscale file get fails, wait before retrying
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			// Parse output for received filenames
-			output := strings.TrimSpace(string(out))
-			if output == "" {
-				continue
-			}
-
-			for _, line := range strings.Split(output, "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
-				}
-				// tailscale file get outputs the filename
-				filename := filepath.Base(line)
-				receivedPath := filepath.Join(dlDir, filename)
-
-				// Get file size
-				var size int64
-				if fi, err := os.Stat(receivedPath); err == nil {
-					size = fi.Size()
-				}
-
-				// Create a received message (use "taildrop" as fallback chat key)
-				msg := Message{
-					ID:        uuid.New().String(),
-					Sender:    "taildrop",
-					Content:   filename,
-					Timestamp: time.Now(),
-					IsOwn:     false,
-					State:     StateDelivered,
-					FileInfo: &FileInfo{
-						Filename: filename,
-						Size:     size,
-						State:    FileReceived,
-						Path:     receivedPath,
-					},
-				}
-
-				chatKey := "taildrop"
-				m.mu.Lock()
-				m.messages[chatKey] = append(m.messages[chatKey], msg)
-				m.unread[chatKey]++
-				m.persistMessages(chatKey)
-				m.mu.Unlock()
-
-				if m.onMessage != nil {
-					m.onMessage(chatKey, msg)
-				}
-			}
-		}
-	}()
-}
 
 func (m *Manager) ConnectToPeer(ip string) (*tcnet.Connection, error) {
 	addr := fmt.Sprintf("%s:%d", ip, tcnet.DefaultPort)

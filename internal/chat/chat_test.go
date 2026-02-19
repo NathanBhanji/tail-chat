@@ -1182,6 +1182,111 @@ func TestGroupChatMessage(t *testing.T) {
 	}
 }
 
+func TestFileTransferE2E(t *testing.T) {
+	alice, bob, cleanup := setupPair(t)
+	defer cleanup()
+
+	bobGot := make(chan chat.Message, 10)
+	bob.OnMessage(func(chatKey string, msg chat.Message) {
+		bobGot <- msg
+	})
+
+	// Create a test file with known content
+	tmp := t.TempDir()
+	path := tmp + "/transfer.txt"
+	content := "hello, this is a file transfer test!"
+	os.WriteFile(path, []byte(content), 0644)
+
+	// Alice sends the file to bob
+	msgID, err := alice.SendFile("bob", path)
+	if err != nil {
+		t.Fatalf("SendFile: %v", err)
+	}
+
+	// Wait for bob to receive the file (multiple messages: offer, data, complete callbacks)
+	var lastMsg chat.Message
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case msg := <-bobGot:
+			lastMsg = msg
+		default:
+		}
+
+		// Check if bob has a FileReceived message
+		msgs := bob.GetMessages("alice")
+		for _, msg := range msgs {
+			if msg.FileInfo != nil && msg.FileInfo.State == chat.FileReceived {
+				// Success! Verify the received file
+				if msg.FileInfo.Filename != "transfer.txt" {
+					t.Fatalf("expected filename 'transfer.txt', got %q", msg.FileInfo.Filename)
+				}
+				if msg.FileInfo.Path == "" {
+					t.Fatal("expected non-empty path for received file")
+				}
+				// Read the received file and verify contents
+				received, err := os.ReadFile(msg.FileInfo.Path)
+				if err != nil {
+					t.Fatalf("read received file: %v", err)
+				}
+				if string(received) != content {
+					t.Fatalf("file content mismatch: got %q, want %q", string(received), content)
+				}
+				// Also check alice's side — should be FileSent
+				aliceMsgs := alice.GetMessages("bob")
+				for _, am := range aliceMsgs {
+					if am.ID == msgID && am.FileInfo != nil {
+						if am.FileInfo.State != chat.FileSent {
+							t.Fatalf("expected alice's file state FileSent, got %d", am.FileInfo.State)
+						}
+					}
+				}
+				return // test passed
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = lastMsg
+	t.Fatal("timeout waiting for file transfer to complete")
+}
+
+func TestFileTransferNotConnected(t *testing.T) {
+	alice, _, cleanup := setupPair(t)
+	defer cleanup()
+
+	// Create a file
+	tmp := t.TempDir()
+	path := tmp + "/offline.txt"
+	os.WriteFile(path, []byte("test"), 0644)
+
+	// Try to send to a peer that doesn't exist (no connection)
+	_, err := alice.SendFile("nonexistent-peer", path)
+	if err != nil {
+		t.Fatalf("SendFile should not error at creation time: %v", err)
+	}
+
+	// Wait for async send to fail
+	time.Sleep(500 * time.Millisecond)
+
+	// The message should be in FileFailed state
+	msgs := alice.GetMessages("nonexistent-peer")
+	found := false
+	for _, msg := range msgs {
+		if msg.FileInfo != nil {
+			found = true
+			if msg.FileInfo.State != chat.FileFailed {
+				t.Fatalf("expected FileFailed, got %d", msg.FileInfo.State)
+			}
+			if msg.FileInfo.Error == "" {
+				t.Fatal("expected non-empty error message")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("file message not found")
+	}
+}
+
 func TestGroupNonexistent(t *testing.T) {
 	alice, _, cleanup := setupPair(t)
 	defer cleanup()

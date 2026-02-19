@@ -15,14 +15,22 @@ import (
 	"github.com/NathanBhanji/tail-chat/internal/protocol"
 )
 
-// View represents the current screen.
+// Pane identifies which pane has focus.
+type Pane int
+
+const (
+	PaneSidebar Pane = iota
+	PaneChat
+)
+
+// View represents the right-pane content.
 type View int
 
 const (
-	ViewPeers View = iota
-	ViewChat
+	ViewChat View = iota
 	ViewGroupCreate
 	ViewSearch
+	ViewEmpty // no chat selected yet
 )
 
 // IncomingMsg is sent when a new chat message arrives.
@@ -84,7 +92,7 @@ type StatusUpdatedMsg struct {
 	State    string
 }
 
-// FileSentMsg is sent after an async file send starts (contains the message ID for tracking).
+// FileSentMsg is sent after an async file send starts.
 type FileSentMsg struct {
 	ChatKey string
 	MsgID   string
@@ -103,26 +111,33 @@ type Model struct {
 	chatMgr     *chat.Manager
 	peerWatcher *discovery.Watcher
 
-	// State
-	view           View
+	// Layout
+	focusPane Pane
+	view      View // right-pane content
+
+	// Sidebar state
 	peers          []discovery.Peer
 	peerCursor     int
-	activeChatKey  string // hostname or "group:<id>"
-	messages       []chat.Message
-	width          int
-	height         int
-	err            string
-	errExpiry      time.Time
-	connecting     string // hostname we're currently connecting to
-	connectingDots int    // animation counter
+	connecting     string
+	connectingDots int
+
+	// Chat state
+	activeChatKey string
+	messages      []chat.Message
+	scrollOffset  int
+
+	// Window
+	width  int
+	height int
+
+	// Errors
+	err       string
+	errExpiry time.Time
 
 	// Group creation
 	groupName     string
-	groupSelected map[string]bool // hostname -> selected
+	groupSelected map[string]bool
 	groupCursor   int
-
-	// Scrollback
-	scrollOffset int
 
 	// Typing indicators
 	lastTypingSent time.Time
@@ -130,7 +145,7 @@ type Model struct {
 	// Emoji tab completion
 	emojiCompletions []string
 	emojiCompIdx     int
-	emojiReplaceFrom int // cursor position where replacement starts
+	emojiReplaceFrom int
 
 	// Search
 	searchResults []searchResult
@@ -155,7 +170,8 @@ func NewModel(chatMgr *chat.Manager, watcher *discovery.Watcher) Model {
 	return Model{
 		chatMgr:     chatMgr,
 		peerWatcher: watcher,
-		view:        ViewPeers,
+		focusPane:   PaneSidebar,
+		view:        ViewEmpty,
 		peers:       watcher.Peers(),
 		input:       ti,
 	}
@@ -179,15 +195,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.input.Width = msg.Width - 8
+		sw := m.sidebarWidth()
+		m.input.Width = m.width - sw - 8
 		return m, nil
 
 	case IncomingMsg:
-		if m.view == ViewChat && msg.ChatKey == m.activeChatKey {
+		if msg.ChatKey == m.activeChatKey {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
 			return m, nil
 		}
-		// Message arrived for a chat we're not viewing — notify
 		return m, notifyCmd(msg.Message.Sender, msg.Message.Content)
 
 	case PeerConnectMsg:
@@ -201,7 +217,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.Err.Error()
 			m.errExpiry = time.Now().Add(3 * time.Second)
 		}
-		if m.view == ViewChat && msg.ChatKey == m.activeChatKey {
+		if msg.ChatKey == m.activeChatKey {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
 		}
 		return m, nil
@@ -211,7 +227,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.Err.Error()
 			m.errExpiry = time.Now().Add(3 * time.Second)
 		}
-		if m.view == ViewChat && msg.ChatKey == m.activeChatKey {
+		if msg.ChatKey == m.activeChatKey {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
 		}
 		return m, nil
@@ -232,22 +248,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case GroupInviteMsg:
-		// Auto-accept: groups appear instantly on the peer list
 		m.chatMgr.AcceptGroupInvite(msg.Invite, msg.From)
 		return m, nil
 
 	case TypingMsg:
-		// Just triggers a re-render
 		return m, nil
 
 	case ReactionUpdatedMsg:
-		if m.view == ViewChat && msg.ChatKey == m.activeChatKey {
+		if msg.ChatKey == m.activeChatKey {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
 		}
 		return m, nil
 
 	case StatusUpdatedMsg:
-		// Just triggers a re-render (peer list shows status)
 		return m, nil
 
 	case ErrorMsg:
@@ -256,27 +269,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case TickMsg:
-		// Clear expired errors
 		if m.err != "" && time.Now().After(m.errExpiry) {
 			m.err = ""
 		}
-		// Animate connecting dots
 		if m.connecting != "" {
 			m.connectingDots = (m.connectingDots + 1) % 4
 		}
-		// Refresh peers
 		m.peers = m.peerWatcher.Peers()
-		// Defensive refresh: re-read messages when in chat view
-		if m.view == ViewChat && m.activeChatKey != "" {
+		if m.activeChatKey != "" {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
 		}
 		return m, tickCmd()
 	}
 
-	// Update text input
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+// sidebarWidth returns the width of the sidebar pane.
+func (m Model) sidebarWidth() int {
+	sw := m.width / 4
+	if sw < 20 {
+		sw = 20
+	}
+	if sw > 35 {
+		sw = 35
+	}
+	return sw
 }
 
 // openChat sets up the model to display a chat.
@@ -287,6 +307,7 @@ func (m Model) openChat(chatKey string) Model {
 	m.chatMgr.ClearUnread(chatKey)
 	m.chatMgr.SendReadReceipts(chatKey)
 	m.view = ViewChat
+	m.focusPane = PaneChat
 	m.scrollOffset = 0
 	m.emojiCompletions = nil
 	m.emojiCompIdx = 0
@@ -299,14 +320,31 @@ func (m Model) openChat(chatKey string) Model {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// Global quit
 	if key == "ctrl+c" {
 		return m, tea.Quit
 	}
 
+	// Tab switches focus between panes (unless emoji completing)
+	if key == "tab" && m.focusPane == PaneChat && len(m.emojiCompletions) > 0 {
+		return m.handleEmojiCompletion()
+	}
+	if key == "tab" && m.view != ViewGroupCreate && m.view != ViewSearch {
+		if m.focusPane == PaneSidebar && m.activeChatKey != "" {
+			m.focusPane = PaneChat
+			m.input.Focus()
+		} else {
+			m.focusPane = PaneSidebar
+			m.input.Blur()
+		}
+		return m, nil
+	}
+
+	if m.focusPane == PaneSidebar {
+		return m.handleSidebarKeys(key)
+	}
+
+	// Right pane
 	switch m.view {
-	case ViewPeers:
-		return m.handlePeerKeys(key)
 	case ViewChat:
 		return m.handleChatKeys(msg)
 	case ViewGroupCreate:
@@ -318,7 +356,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handlePeerKeys(key string) (tea.Model, tea.Cmd) {
+func (m Model) handleSidebarKeys(key string) (tea.Model, tea.Cmd) {
 	totalItems := len(m.peers) + len(m.chatMgr.Groups())
 
 	switch key {
@@ -339,7 +377,6 @@ func (m Model) handlePeerKeys(key string) (tea.Model, tea.Cmd) {
 		return m.selectPeerItem()
 
 	case "g":
-		// Vim gg: go to top (double-tap g)
 		if m.lastKey == "g" && time.Since(m.lastKeyTime) < 500*time.Millisecond {
 			m.peerCursor = 0
 			m.lastKey = ""
@@ -350,14 +387,13 @@ func (m Model) handlePeerKeys(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "G":
-		// Vim G: go to bottom
 		if totalItems > 0 {
 			m.peerCursor = totalItems - 1
 		}
 
 	case "/":
-		// Enter search mode
 		m.view = ViewSearch
+		m.focusPane = PaneChat
 		m.searchResults = nil
 		m.searchCursor = 0
 		m.searchDone = false
@@ -367,7 +403,6 @@ func (m Model) handlePeerKeys(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "s":
-		// Cycle status: available -> away -> busy -> dnd -> available
 		current := m.chatMgr.GetStatus(m.peerWatcher.SelfHostname())
 		states := []string{"available", "away", "busy", "dnd"}
 		idx := 0
@@ -381,8 +416,8 @@ func (m Model) handlePeerKeys(key string) (tea.Model, tea.Cmd) {
 		m.chatMgr.SetStatus(next)
 
 	case "n":
-		// Create group
 		m.view = ViewGroupCreate
+		m.focusPane = PaneChat
 		m.groupName = ""
 		m.groupSelected = make(map[string]bool)
 		m.groupCursor = 0
@@ -392,11 +427,9 @@ func (m Model) handlePeerKeys(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "r":
-		// Refresh peers
 		m.peers = m.peerWatcher.Peers()
 	}
 
-	// Reset gg detection for non-g keys
 	if key != "g" {
 		m.lastKey = key
 		m.lastKeyTime = time.Now()
@@ -408,7 +441,6 @@ func (m Model) handlePeerKeys(key string) (tea.Model, tea.Cmd) {
 func (m Model) selectPeerItem() (tea.Model, tea.Cmd) {
 	groups := m.chatMgr.Groups()
 
-	// Check if cursor is on a peer
 	if m.peerCursor < len(m.peers) {
 		peer := m.peers[m.peerCursor]
 		if !peer.Online {
@@ -417,18 +449,15 @@ func (m Model) selectPeerItem() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Check if already connected
 		if m.chatMgr.IsConnected(peer.Hostname) {
 			m = m.openChat(peer.Hostname)
 			return m, nil
 		}
 
-		// Don't double-connect
 		if m.connecting != "" {
 			return m, nil
 		}
 
-		// Connect (async — UI stays responsive)
 		ip := peer.TailscaleIP
 		hostname := peer.Hostname
 		m.connecting = hostname
@@ -439,7 +468,6 @@ func (m Model) selectPeerItem() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Check if cursor is on a group
 	groupIdx := m.peerCursor - len(m.peers)
 	if groupIdx >= 0 && groupIdx < len(groups) {
 		group := groups[groupIdx]
@@ -455,13 +483,12 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "esc":
-		m.view = ViewPeers
+		m.focusPane = PaneSidebar
 		m.input.Blur()
 		m.chatMgr.SendTyping(m.activeChatKey, false)
 		return m, nil
 
 	case "ctrl+u":
-		// Vim: scroll up half page
 		half := (m.height - 8) / 2
 		if half < 1 {
 			half = 1
@@ -477,7 +504,6 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "ctrl+d":
-		// Vim: scroll down half page
 		half := (m.height - 8) / 2
 		if half < 1 {
 			half = 1
@@ -514,10 +540,6 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "tab":
-		// Emoji tab completion
-		return m.handleEmojiCompletion()
-
 	case "enter":
 		content := strings.TrimSpace(m.input.Value())
 		if content == "" {
@@ -529,14 +551,9 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.scrollOffset = 0
 		m.chatMgr.SendTyping(m.activeChatKey, false)
 
-		// Handle /file command (sends via Taildrop)
+		// Handle /file command
 		if strings.HasPrefix(content, "/file ") {
 			path := strings.TrimSpace(content[6:])
-			if strings.HasPrefix(m.activeChatKey, "group:") {
-				m.err = "File transfer not supported in groups"
-				m.errExpiry = time.Now().Add(3 * time.Second)
-				return m, nil
-			}
 			chatKey := m.activeChatKey
 			chatMgr := m.chatMgr
 			return m, func() tea.Msg {
@@ -549,7 +566,6 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(content, "/react ") {
 			emoji := strings.TrimSpace(content[7:])
 			emoji = expandEmoji(emoji)
-			// React to the last non-own message
 			for i := len(m.messages) - 1; i >= 0; i-- {
 				if !m.messages[i].IsOwn && m.messages[i].Sender != "system" {
 					m.chatMgr.SendReaction(m.activeChatKey, m.messages[i].ID, emoji)
@@ -566,10 +582,8 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Normal message — expand emoji shortcodes before sending
+		// Normal message
 		content = expandEmoji(content)
-
-		// Send async so the TCP write doesn't block the UI
 		chatKey := m.activeChatKey
 		chatMgr := m.chatMgr
 		return m, func() tea.Msg {
@@ -588,11 +602,9 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.emojiCompletions = nil
 	m.emojiCompIdx = 0
 
-	// Pass to text input
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 
-	// Send typing indicator (throttled to once every 2s)
 	if m.input.Value() != "" && time.Since(m.lastTypingSent) > 2*time.Second {
 		m.lastTypingSent = time.Now()
 		m.chatMgr.SendTyping(m.activeChatKey, true)
@@ -604,7 +616,6 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleEmojiCompletion() (tea.Model, tea.Cmd) {
 	val := m.input.Value()
 
-	// If already cycling through completions, advance to next
 	if len(m.emojiCompletions) > 0 {
 		m.emojiCompIdx = (m.emojiCompIdx + 1) % len(m.emojiCompletions)
 		code := m.emojiCompletions[m.emojiCompIdx]
@@ -614,7 +625,6 @@ func (m Model) handleEmojiCompletion() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Find partial shortcode: last ':' followed by letters (no spaces)
 	lastColon := strings.LastIndexByte(val, ':')
 	if lastColon < 0 || lastColon >= len(val)-1 {
 		return m, nil
@@ -624,7 +634,6 @@ func (m Model) handleEmojiCompletion() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Build matches
 	lower := strings.ToLower(prefix)
 	var matches []string
 	for code := range shortcodes {
@@ -652,12 +661,15 @@ func (m Model) handleEmojiCompletion() (tea.Model, tea.Cmd) {
 func (m Model) handleGroupCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// Phase 1: entering group name (text input active)
 	if m.groupName == "" {
 		switch key {
 		case "esc":
-			m.view = ViewPeers
+			m.view = ViewChat
+			m.focusPane = PaneSidebar
 			m.input.Blur()
+			if m.activeChatKey == "" {
+				m.view = ViewEmpty
+			}
 			return m, nil
 		case "enter":
 			val := strings.TrimSpace(m.input.Value())
@@ -675,12 +687,16 @@ func (m Model) handleGroupCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// Phase 2: selecting members from peer list
 	connectedPeers := m.connectedPeers()
 
 	switch key {
 	case "esc":
-		m.view = ViewPeers
+		m.focusPane = PaneSidebar
+		if m.activeChatKey != "" {
+			m.view = ViewChat
+		} else {
+			m.view = ViewEmpty
+		}
 		return m, nil
 
 	case "up", "k":
@@ -694,14 +710,12 @@ func (m Model) handleGroupCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case " ", "enter":
-		// Toggle selection
 		if m.groupCursor < len(connectedPeers) {
 			host := connectedPeers[m.groupCursor]
 			m.groupSelected[host] = !m.groupSelected[host]
 		}
 
 	case "ctrl+s":
-		// Create the group with selected members
 		var members []string
 		for host, sel := range m.groupSelected {
 			if sel {
@@ -710,7 +724,12 @@ func (m Model) handleGroupCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if len(members) > 0 {
 			m.chatMgr.CreateGroup(m.groupName, members)
-			m.view = ViewPeers
+			m.focusPane = PaneSidebar
+			if m.activeChatKey != "" {
+				m.view = ViewChat
+			} else {
+				m.view = ViewEmpty
+			}
 		}
 		return m, nil
 	}
@@ -718,7 +737,6 @@ func (m Model) handleGroupCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// connectedPeers returns hostnames of all peers we have an active connection to.
 func (m Model) connectedPeers() []string {
 	var result []string
 	for _, p := range m.peers {
@@ -734,14 +752,18 @@ func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "esc":
-		m.view = ViewPeers
+		m.focusPane = PaneSidebar
 		m.input.Blur()
 		m.searchResults = nil
+		if m.activeChatKey != "" {
+			m.view = ViewChat
+		} else {
+			m.view = ViewEmpty
+		}
 		return m, nil
 
 	case "enter":
 		if !m.searchDone {
-			// Execute search
 			query := strings.TrimSpace(m.input.Value())
 			if query == "" {
 				return m, nil
@@ -756,7 +778,6 @@ func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					})
 				}
 			}
-			// Sort by timestamp descending (newest first)
 			sort.Slice(m.searchResults, func(i, j int) bool {
 				return m.searchResults[i].Message.Timestamp.After(m.searchResults[j].Message.Timestamp)
 			})
@@ -766,7 +787,6 @@ func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Select search result — jump to that chat
 		if m.searchCursor < len(m.searchResults) {
 			result := m.searchResults[m.searchCursor]
 			m.searchResults = nil
@@ -787,7 +807,6 @@ func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "/":
-		// Start a new search
 		if m.searchDone {
 			m.searchDone = false
 			m.searchResults = nil
@@ -797,7 +816,6 @@ func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Pass to text input when in query mode
 	if !m.searchDone {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
@@ -807,159 +825,180 @@ func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// --- View ---
+
 func (m Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
 
+	sw := m.sidebarWidth()
+	chatWidth := m.width - sw - 3 // borders + padding
+
+	sidebar := m.renderSidebar(sw)
+	var rightPane string
+
 	switch m.view {
-	case ViewPeers:
-		return m.viewPeers()
 	case ViewChat:
-		return m.viewChat()
+		rightPane = m.renderChat(chatWidth)
 	case ViewGroupCreate:
-		return m.viewGroupCreate()
+		rightPane = m.renderGroupCreate(chatWidth)
 	case ViewSearch:
-		return m.viewSearch()
+		rightPane = m.renderSearch(chatWidth)
+	default:
+		rightPane = m.renderEmpty(chatWidth)
 	}
 
-	return ""
+	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, rightPane)
 }
 
-func (m Model) viewPeers() string {
+func (m Model) renderSidebar(width int) string {
+	h := m.height - 2 // border
+	innerW := width - 4 // border + padding
+
 	var b strings.Builder
 
 	// Title
-	title := titleStyle.Render(" tailchat ")
-	b.WriteString(title)
-	b.WriteString("\n\n")
+	b.WriteString(sidebarTitle.Render("tailchat"))
+	b.WriteString("\n")
 
-	// Self info with status
+	// Self info
 	selfHost := m.peerWatcher.SelfHostname()
-	selfIP := m.peerWatcher.SelfIP()
 	selfStatus := m.chatMgr.GetStatus(selfHost)
 	statusLabel := ""
 	if selfStatus != "" && selfStatus != "available" {
 		statusLabel = " " + statusText(selfStatus)
 	}
-	b.WriteString(fmt.Sprintf("  %s  %s%s\n",
+	self := fmt.Sprintf("%s %s%s",
 		peerOnline.Render("\u25cf"),
-		lipgloss.NewStyle().Foreground(text).Bold(true).Render(
-			fmt.Sprintf("%s (%s)", selfHost, selfIP)),
-		statusLabel,
-	))
-	b.WriteString("\n")
+		truncate(selfHost, innerW-4),
+		statusLabel)
+	b.WriteString(self)
+	b.WriteString("\n\n")
 
-	// Peers section
+	linesUsed := 4
+
+	// Peers
 	onlineCount := 0
 	for _, p := range m.peers {
 		if p.Online {
 			onlineCount++
 		}
 	}
-
-	b.WriteString(sidebarTitle.Render(fmt.Sprintf("  Peers (%d online)", onlineCount)))
+	b.WriteString(helpStyle.Render(fmt.Sprintf("Peers (%d)", onlineCount)))
 	b.WriteString("\n")
+	linesUsed++
 
 	idx := 0
 	for _, peer := range m.peers {
+		if linesUsed >= h-4 {
+			break
+		}
+
 		var dot string
 		switch {
 		case m.chatMgr.IsConnected(peer.Hostname):
-			dot = encryptedBadge.Render("\u25cf") // green — connected + encrypted
+			dot = encryptedBadge.Render("\u25cf")
 		case peer.RunningTailchat:
-			dot = tailchatOnline.Render("\u25cf") // cyan — running tailchat
+			dot = tailchatOnline.Render("\u25cf")
 		case peer.Online:
-			dot = peerOnline.Render("\u25cb") // green outline — online on tailscale only
+			dot = peerOnline.Render("\u25cb")
 		default:
-			dot = peerOffline.Render("\u25cb") // gray — offline
+			dot = peerOffline.Render("\u25cb")
 		}
 
-		connStatus := ""
-		if m.chatMgr.IsConnected(peer.Hostname) {
-			connStatus = encryptedBadge.Render(" \U0001f512")
-			// Show peer status if not available
-			state := m.chatMgr.GetStatus(peer.Hostname)
-			if state != "" && state != "available" {
-				connStatus += " " + statusText(state)
-			}
-		}
-
+		name := truncate(peer.Hostname, innerW-6)
 		unreadBadge := ""
 		if n := m.chatMgr.Unread(peer.Hostname); n > 0 {
-			unreadBadge = unreadStyle.Render(fmt.Sprintf(" (%d)", n))
+			unreadBadge = unreadStyle.Render(fmt.Sprintf(" %d", n))
 		}
 
-		tcBadge := ""
-		if peer.RunningTailchat && !m.chatMgr.IsConnected(peer.Hostname) {
-			tcBadge = tailchatBadge.Render(" [tailchat]")
-		}
+		line := fmt.Sprintf("%s %s%s", dot, name, unreadBadge)
 
-		name := fmt.Sprintf("%s %s  %s%s%s%s", dot, peer.Hostname, helpStyle.Render(peer.TailscaleIP), connStatus, tcBadge, unreadBadge)
-
-		if idx == m.peerCursor {
-			b.WriteString(peerSelected.Render(name))
+		if idx == m.peerCursor && m.focusPane == PaneSidebar {
+			b.WriteString(peerSelected.Render(line))
+		} else if peer.Hostname == m.activeChatKey {
+			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(text).Render(line))
 		} else {
-			b.WriteString(peerNormal.Render(name))
+			b.WriteString(peerNormal.Render(line))
 		}
 		b.WriteString("\n")
 		idx++
+		linesUsed++
 	}
 
-	// Groups section
+	// Groups
 	groups := m.chatMgr.Groups()
-	if len(groups) > 0 {
+	if len(groups) > 0 && linesUsed < h-4 {
 		b.WriteString("\n")
-		b.WriteString(sidebarTitle.Render("  Groups"))
+		b.WriteString(helpStyle.Render("Groups"))
 		b.WriteString("\n")
+		linesUsed += 2
 
 		for _, g := range groups {
-			name := fmt.Sprintf("%s %s (%d members)", groupBadge.Render("#"), g.Name, len(g.Members))
-			if idx == m.peerCursor {
-				b.WriteString(peerSelected.Render(name))
+			if linesUsed >= h-4 {
+				break
+			}
+			chatKey := "group:" + g.ID
+			name := fmt.Sprintf("%s %s", groupBadge.Render("#"), truncate(g.Name, innerW-6))
+			unreadBadge := ""
+			if n := m.chatMgr.Unread(chatKey); n > 0 {
+				unreadBadge = unreadStyle.Render(fmt.Sprintf(" %d", n))
+			}
+			line := name + unreadBadge
+
+			if idx == m.peerCursor && m.focusPane == PaneSidebar {
+				b.WriteString(peerSelected.Render(line))
+			} else if chatKey == m.activeChatKey {
+				b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(text).Render(line))
 			} else {
-				b.WriteString(peerNormal.Render(name))
+				b.WriteString(peerNormal.Render(line))
 			}
 			b.WriteString("\n")
 			idx++
+			linesUsed++
 		}
 	}
 
 	// Connecting indicator
-	if m.connecting != "" {
+	if m.connecting != "" && linesUsed < h-2 {
 		dots := strings.Repeat(".", m.connectingDots+1)
 		b.WriteString("\n")
-		b.WriteString(connectingStyle.Render(fmt.Sprintf("  Connecting to %s%s", m.connecting, dots)))
+		b.WriteString(connectingStyle.Render(truncate(fmt.Sprintf("%s%s", m.connecting, dots), innerW)))
 		b.WriteString("\n")
+		linesUsed += 2
 	}
 
-	// Error
-	if m.err != "" {
+	// Pad remaining height
+	for linesUsed < h-2 {
 		b.WriteString("\n")
-		b.WriteString(errorStyle.Render("  " + m.err))
-		b.WriteString("\n")
+		linesUsed++
 	}
 
-	// Help
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("  j/k navigate \u2022 l/enter connect \u2022 gg/G top/bottom \u2022 / search \u2022 n new group"))
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("  s cycle status \u2022 r refresh \u2022 q quit"))
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render(fmt.Sprintf("  %s connected  %s tailchat  %s online  %s offline",
-		encryptedBadge.Render("\u25cf"), tailchatOnline.Render("\u25cf"), peerOnline.Render("\u25cb"), peerOffline.Render("\u25cb"))))
+	// Help at bottom
+	if m.focusPane == PaneSidebar {
+		b.WriteString(helpStyle.Render("j/k \u2022 enter \u2022 tab \u2192"))
+	} else {
+		b.WriteString(helpStyle.Render("tab \u2190 focus"))
+	}
 
-	return appStyle.Render(b.String())
+	style := sidebarBlurred.Width(width - 2).Height(h)
+	if m.focusPane == PaneSidebar {
+		style = sidebarFocused.Width(width - 2).Height(h)
+	}
+	return style.Render(b.String())
 }
 
-func (m Model) viewChat() string {
+func (m Model) renderChat(width int) string {
+	h := m.height - 2
+	innerW := width - 4
+
 	var b strings.Builder
 
 	// Header
 	chatName := m.activeChatKey
 	if strings.HasPrefix(chatName, "group:") {
-		groups := m.chatMgr.Groups()
-		for _, g := range groups {
+		for _, g := range m.chatMgr.Groups() {
 			if "group:"+g.ID == m.activeChatKey {
 				chatName = "# " + g.Name
 				break
@@ -967,7 +1006,6 @@ func (m Model) viewChat() string {
 		}
 	}
 
-	// Show peer status in header for 1:1 chats
 	peerStatus := ""
 	if !strings.HasPrefix(m.activeChatKey, "group:") {
 		state := m.chatMgr.GetStatus(m.activeChatKey)
@@ -976,14 +1014,11 @@ func (m Model) viewChat() string {
 		}
 	}
 
-	header := fmt.Sprintf(" tailchat \u2014 %s%s %s",
-		chatName, peerStatus,
-		encryptedBadge.Render("e2e encrypted"),
-	)
-	b.WriteString(titleStyle.Render(header))
+	header := fmt.Sprintf("%s%s %s", chatName, peerStatus, encryptedBadge.Render("\U0001f512"))
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primary).Render(truncate(header, innerW)))
 	b.WriteString("\n\n")
 
-	// Calculate extra lines below messages
+	// Calculate space
 	extraLines := 0
 	isTyping := !strings.HasPrefix(m.activeChatKey, "group:") && m.chatMgr.IsTyping(m.activeChatKey)
 	if isTyping {
@@ -999,12 +1034,12 @@ func (m Model) viewChat() string {
 		extraLines++
 	}
 
-	availHeight := m.height - 8 - extraLines
+	availHeight := h - 7 - extraLines
 	if availHeight < 3 {
 		availHeight = 3
 	}
 
-	// Determine visible message window with scrollback
+	// Message window with scrollback
 	msgs := m.messages
 	endIdx := len(msgs) - m.scrollOffset
 	if endIdx > len(msgs) {
@@ -1014,13 +1049,12 @@ func (m Model) viewChat() string {
 		endIdx = 0
 	}
 
-	// Work backwards from endIdx to find how many messages fit
 	linesUsed := 0
 	startIdx := endIdx
 	for i := endIdx - 1; i >= 0; i-- {
-		lines := 1 // the message line itself
+		lines := 1
 		if len(msgs[i].Reactions) > 0 {
-			lines++ // reaction line
+			lines++
 		}
 		if linesUsed+lines > availHeight {
 			break
@@ -1029,18 +1063,15 @@ func (m Model) viewChat() string {
 		startIdx = i
 	}
 
-	// Render messages
 	for i := startIdx; i < endIdx; i++ {
 		msg := msgs[i]
 		ts := msgTimeStyle.Render(msg.Timestamp.Format("15:04"))
 
 		if msg.Sender == "system" {
-			b.WriteString(fmt.Sprintf("  %s %s\n",
-				ts, systemMsgStyle.Render(msg.Content)))
+			b.WriteString(fmt.Sprintf(" %s %s\n", ts, systemMsgStyle.Render(msg.Content)))
 			continue
 		}
 
-		// File transfer messages get special rendering
 		if msg.FileInfo != nil {
 			var sender string
 			if msg.IsOwn {
@@ -1048,8 +1079,7 @@ func (m Model) viewChat() string {
 			} else {
 				sender = peerMsgStyle.Render(msg.Sender)
 			}
-			b.WriteString(fmt.Sprintf("  %s %s: %s\n",
-				ts, sender, renderFileTransfer(msg.FileInfo)))
+			b.WriteString(fmt.Sprintf(" %s %s: %s\n", ts, sender, renderFileTransfer(msg.FileInfo)))
 			continue
 		}
 
@@ -1060,7 +1090,6 @@ func (m Model) viewChat() string {
 			sender = peerMsgStyle.Render(msg.Sender)
 		}
 
-		// Delivery state for own messages
 		tick := ""
 		if msg.IsOwn {
 			switch msg.State {
@@ -1073,50 +1102,40 @@ func (m Model) viewChat() string {
 			}
 		}
 
-		// Render content with URL/GIF detection
 		rendered := renderContent(msg.Content)
-		b.WriteString(fmt.Sprintf("  %s %s: %s%s\n",
-			ts, sender, rendered, tick))
+		b.WriteString(fmt.Sprintf(" %s %s: %s%s\n", ts, sender, rendered, tick))
 
-		// Reactions
 		if len(msg.Reactions) > 0 {
-			b.WriteString(fmt.Sprintf("  %s %s\n",
-				strings.Repeat(" ", 5),
-				renderReactions(msg.Reactions)))
+			b.WriteString(fmt.Sprintf(" %s %s\n", strings.Repeat(" ", 5), renderReactions(msg.Reactions)))
 		}
 	}
 
 	if len(msgs) == 0 {
-		b.WriteString(helpStyle.Render("  No messages yet. Say hello!\n"))
+		b.WriteString(helpStyle.Render(" No messages yet. Say hello!\n"))
 		linesUsed = 1
 	}
 
-	// Pad to fill remaining space
 	for i := linesUsed; i < availHeight; i++ {
 		b.WriteString("\n")
 	}
 
-	// Scroll indicator
 	if m.scrollOffset > 0 {
-		b.WriteString(scrollIndicator.Render(fmt.Sprintf("  \u2191 %d older messages", m.scrollOffset)))
+		b.WriteString(scrollIndicator.Render(fmt.Sprintf(" \u2191 %d older messages", m.scrollOffset)))
 		b.WriteString("\n")
 	}
 
-	// Typing indicator
 	if isTyping {
-		b.WriteString(typingStyle.Render(fmt.Sprintf("  %s is typing...", m.activeChatKey)))
+		b.WriteString(typingStyle.Render(fmt.Sprintf(" %s is typing...", m.activeChatKey)))
 		b.WriteString("\n")
 	}
 
-	// Error in chat view
 	if m.err != "" {
-		b.WriteString(errorStyle.Render("  " + m.err))
+		b.WriteString(errorStyle.Render(" " + m.err))
 		b.WriteString("\n")
 	}
 
-	// Emoji completion suggestions
 	if len(m.emojiCompletions) > 0 {
-		maxShow := 8
+		maxShow := 6
 		comps := m.emojiCompletions
 		if len(comps) > maxShow {
 			comps = comps[:maxShow]
@@ -1131,45 +1150,84 @@ func (m Model) viewChat() string {
 			}
 		}
 		if len(m.emojiCompletions) > maxShow {
-			parts = append(parts, helpStyle.Render(fmt.Sprintf("+%d more", len(m.emojiCompletions)-maxShow)))
+			parts = append(parts, helpStyle.Render(fmt.Sprintf("+%d", len(m.emojiCompletions)-maxShow)))
 		}
-		b.WriteString("  " + strings.Join(parts, ""))
+		b.WriteString(" " + strings.Join(parts, ""))
 		b.WriteString("\n")
 	}
 
 	// Input
-	b.WriteString("\n")
-	b.WriteString(inputStyle.Render(m.input.View()))
+	m.input.Width = innerW - 2
+	b.WriteString(inputStyle.Width(innerW).Render(m.input.View()))
 	b.WriteString("\n")
 
 	// Help
-	b.WriteString(helpStyle.Render("  enter send \u2022 tab :emoji: \u2022 ctrl+u/d scroll \u2022 /react /file (taildrop) \u2022 esc back"))
+	b.WriteString(helpStyle.Render(" enter send \u2022 /react /file \u2022 esc \u2190"))
 
-	return appStyle.Render(b.String())
+	style := chatBlurred.Width(width - 2).Height(h)
+	if m.focusPane == PaneChat {
+		style = chatFocused.Width(width - 2).Height(h)
+	}
+	return style.Render(b.String())
 }
 
-func (m Model) viewGroupCreate() string {
-	var b strings.Builder
+func (m Model) renderEmpty(width int) string {
+	h := m.height - 2
+	innerW := width - 4
 
-	b.WriteString(titleStyle.Render(" tailchat \u2014 New Group "))
+	var b strings.Builder
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primary).Render("tailchat"))
+	b.WriteString("\n\n")
+
+	welcome := []string{
+		"Select a peer to start chatting.",
+		"",
+		fmt.Sprintf("%s connected  %s tailchat",
+			encryptedBadge.Render("\u25cf"), tailchatOnline.Render("\u25cf")),
+		fmt.Sprintf("%s online     %s offline",
+			peerOnline.Render("\u25cb"), peerOffline.Render("\u25cb")),
+		"",
+		"j/k navigate \u2022 enter connect",
+		"/ search \u2022 n new group",
+		"s cycle status \u2022 q quit",
+	}
+
+	for _, line := range welcome {
+		b.WriteString(helpStyle.Render(truncate(line, innerW)))
+		b.WriteString("\n")
+	}
+
+	// Pad
+	for i := len(welcome) + 3; i < h-2; i++ {
+		b.WriteString("\n")
+	}
+
+	style := chatBlurred.Width(width - 2).Height(h)
+	return style.Render(b.String())
+}
+
+func (m Model) renderGroupCreate(width int) string {
+	h := m.height - 2
+	innerW := width - 4
+
+	var b strings.Builder
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primary).Render("New Group"))
 	b.WriteString("\n\n")
 
 	if m.groupName == "" {
-		// Phase 1: name entry
-		b.WriteString("  Enter group name:\n\n")
-		b.WriteString(inputStyle.Render(m.input.View()))
+		b.WriteString("Enter group name:\n\n")
+		m.input.Width = innerW - 2
+		b.WriteString(inputStyle.Width(innerW).Render(m.input.View()))
 		b.WriteString("\n\n")
-		b.WriteString(helpStyle.Render("  enter confirm \u2022 esc cancel"))
+		b.WriteString(helpStyle.Render("enter confirm \u2022 esc cancel"))
 	} else {
-		// Phase 2: member selection
-		b.WriteString(fmt.Sprintf("  Group: %s\n", groupBadge.Render("# "+m.groupName)))
-		b.WriteString("\n")
-		b.WriteString(sidebarTitle.Render("  Select members"))
+		b.WriteString(fmt.Sprintf("Group: %s\n\n", groupBadge.Render("# "+m.groupName)))
+		b.WriteString(helpStyle.Render("Select members"))
 		b.WriteString("\n")
 
 		connectedPeers := m.connectedPeers()
 		if len(connectedPeers) == 0 {
-			b.WriteString(helpStyle.Render("  No connected peers. Connect to peers first.\n"))
+			b.WriteString(helpStyle.Render("No connected peers.\n"))
 		}
 
 		for i, host := range connectedPeers {
@@ -1178,7 +1236,7 @@ func (m Model) viewGroupCreate() string {
 				check = encryptedBadge.Render("[x]")
 			}
 
-			line := fmt.Sprintf("%s %s", check, host)
+			line := fmt.Sprintf("%s %s", check, truncate(host, innerW-6))
 			if i == m.groupCursor {
 				b.WriteString(peerSelected.Render(line))
 			} else {
@@ -1187,7 +1245,6 @@ func (m Model) viewGroupCreate() string {
 			b.WriteString("\n")
 		}
 
-		// Count selected
 		selected := 0
 		for _, sel := range m.groupSelected {
 			if sel {
@@ -1195,32 +1252,42 @@ func (m Model) viewGroupCreate() string {
 			}
 		}
 		if selected > 0 {
-			b.WriteString(fmt.Sprintf("\n  %s\n",
-				encryptedBadge.Render(fmt.Sprintf("%d selected", selected))))
+			b.WriteString(fmt.Sprintf("\n%s\n", encryptedBadge.Render(fmt.Sprintf("%d selected", selected))))
 		}
 
 		b.WriteString("\n")
-		b.WriteString(helpStyle.Render("  j/k navigate \u2022 space toggle \u2022 ctrl+s create \u2022 esc cancel"))
+		b.WriteString(helpStyle.Render("j/k \u2022 space toggle \u2022 ctrl+s create \u2022 esc cancel"))
 	}
 
-	return appStyle.Render(b.String())
+	// Pad
+	content := b.String()
+	lines := strings.Count(content, "\n")
+	for i := lines; i < h-2; i++ {
+		content += "\n"
+	}
+
+	style := chatFocused.Width(width - 2).Height(h)
+	return style.Render(content)
 }
 
-func (m Model) viewSearch() string {
-	var b strings.Builder
+func (m Model) renderSearch(width int) string {
+	h := m.height - 2
+	innerW := width - 4
 
-	b.WriteString(titleStyle.Render(" tailchat \u2014 Search "))
+	var b strings.Builder
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primary).Render("Search"))
 	b.WriteString("\n\n")
 
 	if !m.searchDone {
-		b.WriteString("  Enter search query:\n\n")
-		b.WriteString(inputStyle.Render(m.input.View()))
+		b.WriteString("Enter search query:\n\n")
+		m.input.Width = innerW - 2
+		b.WriteString(inputStyle.Width(innerW).Render(m.input.View()))
 		b.WriteString("\n\n")
-		b.WriteString(helpStyle.Render("  enter search \u2022 esc cancel"))
+		b.WriteString(helpStyle.Render("enter search \u2022 esc cancel"))
 	} else {
-		b.WriteString(fmt.Sprintf("  Results: %d matches\n\n", len(m.searchResults)))
+		b.WriteString(fmt.Sprintf("Results: %d matches\n\n", len(m.searchResults)))
 
-		maxShow := m.height - 10
+		maxShow := h - 8
 		if maxShow < 5 {
 			maxShow = 5
 		}
@@ -1231,11 +1298,10 @@ func (m Model) viewSearch() string {
 		for i := 0; i < maxShow; i++ {
 			r := m.searchResults[i]
 			ts := r.Message.Timestamp.Format("Jan 02 15:04")
-			line := fmt.Sprintf("  [%s] %s \u2014 %s: %s",
+			line := fmt.Sprintf("[%s] %s: %s",
 				helpStyle.Render(ts),
-				sidebarTitle.Render(r.ChatKey),
 				peerMsgStyle.Render(r.Message.Sender),
-				truncate(r.Message.Content, 50),
+				truncate(r.Message.Content, innerW-30),
 			)
 			if i == m.searchCursor {
 				b.WriteString(peerSelected.Render(line))
@@ -1246,14 +1312,21 @@ func (m Model) viewSearch() string {
 		}
 
 		if len(m.searchResults) == 0 {
-			b.WriteString(helpStyle.Render("  No results found.\n"))
+			b.WriteString(helpStyle.Render("No results found.\n"))
 		}
 
 		b.WriteString("\n")
-		b.WriteString(helpStyle.Render("  j/k navigate \u2022 enter open chat \u2022 / new search \u2022 esc back"))
+		b.WriteString(helpStyle.Render("j/k \u2022 enter open \u2022 / new search \u2022 esc back"))
 	}
 
-	return appStyle.Render(b.String())
+	content := b.String()
+	lines := strings.Count(content, "\n")
+	for i := lines; i < h-2; i++ {
+		content += "\n"
+	}
+
+	style := chatFocused.Width(width - 2).Height(h)
+	return style.Render(content)
 }
 
 // --- Helpers ---
@@ -1342,6 +1415,9 @@ func formatFileSize(bytes int64) string {
 }
 
 func truncate(s string, max int) string {
+	if max < 4 {
+		max = 4
+	}
 	runes := []rune(s)
 	if len(runes) <= max {
 		return s

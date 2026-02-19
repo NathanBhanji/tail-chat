@@ -160,6 +160,9 @@ func TestWrapAllMessageTypes(t *testing.T) {
 		{"Reaction", TypeReaction, &Reaction{MessageID: "1", ChatKey: "bob", Emoji: "👍", Sender: "alice"}},
 		{"Status", TypeStatus, &Status{State: "busy"}},
 		{"ReadReceipt", TypeReadReceipt, &ReadReceipt{MessageID: "1", ChatKey: "bob"}},
+		{"FileOffer", TypeFileOffer, &FileOffer{ID: "t1", Filename: "test.txt", Size: 1024, Checksum: "abc123", ChatKey: "bob"}},
+		{"FileData", TypeFileData, &FileData{ID: "t1", Offset: 0, Data: "aGVsbG8="}},
+		{"FileComplete", TypeFileComplete, &FileComplete{ID: "t1"}},
 	}
 
 	for _, tt := range tests {
