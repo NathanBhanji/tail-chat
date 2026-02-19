@@ -33,7 +33,7 @@ const (
 type FileState int
 
 const (
-	FileSending  FileState = iota
+	FileSending FileState = iota
 	FileSent
 	FileFailed
 	FileReceived
@@ -77,6 +77,9 @@ type Group struct {
 // fileChunkSize is the raw bytes per FileData chunk (64KB).
 const fileChunkSize = 64 * 1024
 
+// maxMessagesPerChat caps in-memory message history per chat to prevent OOM.
+const maxMessagesPerChat = 1000
+
 // fileTransfer tracks an in-progress incoming file transfer.
 type fileTransfer struct {
 	chatKey  string
@@ -90,23 +93,26 @@ type fileTransfer struct {
 
 // Manager coordinates chat sessions, message encryption, and delivery.
 type Manager struct {
-	mu            sync.RWMutex
-	server        *tcnet.Server
-	keyPair       *crypto.KeyPair
-	hostname      string
-	messages      map[string][]Message
-	groups        map[string]*Group
-	unread        map[string]int
-	typing        map[string]time.Time
-	peerStatus    map[string]string
-	store         *storage.Store
+	mu              sync.RWMutex
+	server          *tcnet.Server
+	keyPair         *crypto.KeyPair
+	hostname        string
+	messages        map[string][]Message
+	groups          map[string]*Group
+	unread          map[string]int
+	typing          map[string]time.Time
+	peerStatus      map[string]string
+	store           *storage.Store
 	activeTransfers map[string]*fileTransfer // transfer ID -> state
-	onMessage     func(chatKey string, msg Message)
-	onGroupInvite func(invite *protocol.GroupInvite, from string)
-	onPeerConnect func(hostname string)
-	onTyping      func(chatKey string, isTyping bool)
-	onReaction    func(chatKey string, msgID string)
-	onStatus      func(hostname string, state string)
+	onMessage       func(chatKey string, msg Message)
+	onGroupInvite   func(invite *protocol.GroupInvite, from string)
+	onPeerConnect   func(hostname string)
+	onTyping        func(chatKey string, isTyping bool)
+	onReaction      func(chatKey string, msgID string)
+	onStatus        func(hostname string, state string)
+
+	// TOFU key pinning
+	knownKeys *crypto.KnownKeys
 
 	// Auto-reconnect
 	reconnectTargets map[string]string
@@ -115,7 +121,7 @@ type Manager struct {
 }
 
 // NewManager creates a chat manager.
-func NewManager(server *tcnet.Server, kp *crypto.KeyPair, hostname string, store *storage.Store) *Manager {
+func NewManager(server *tcnet.Server, kp *crypto.KeyPair, hostname string, store *storage.Store, knownKeys *crypto.KnownKeys) *Manager {
 	m := &Manager{
 		server:           server,
 		keyPair:          kp,
@@ -126,6 +132,7 @@ func NewManager(server *tcnet.Server, kp *crypto.KeyPair, hostname string, store
 		typing:           make(map[string]time.Time),
 		peerStatus:       make(map[string]string),
 		store:            store,
+		knownKeys:        knownKeys,
 		activeTransfers:  make(map[string]*fileTransfer),
 		reconnectTargets: make(map[string]string),
 		reconnectStop:    make(chan struct{}),
@@ -251,13 +258,24 @@ func (m *Manager) persistGroups() {
 	go m.store.SaveGroups(groups)
 }
 
+// trimMessages ensures a chat's in-memory history doesn't exceed maxMessagesPerChat.
+// Must be called with m.mu held.
+func (m *Manager) trimMessages(chatKey string) {
+	msgs := m.messages[chatKey]
+	if len(msgs) > maxMessagesPerChat {
+		m.messages[chatKey] = msgs[len(msgs)-maxMessagesPerChat:]
+	}
+}
+
 // Callbacks
-func (m *Manager) OnMessage(fn func(chatKey string, msg Message))                  { m.onMessage = fn }
-func (m *Manager) OnGroupInvite(fn func(invite *protocol.GroupInvite, from string)) { m.onGroupInvite = fn }
-func (m *Manager) OnPeerConnect(fn func(hostname string))                           { m.onPeerConnect = fn }
-func (m *Manager) OnTyping(fn func(chatKey string, isTyping bool))                  { m.onTyping = fn }
-func (m *Manager) OnReaction(fn func(chatKey string, msgID string))                 { m.onReaction = fn }
-func (m *Manager) OnStatus(fn func(hostname string, state string))                  { m.onStatus = fn }
+func (m *Manager) OnMessage(fn func(chatKey string, msg Message)) { m.onMessage = fn }
+func (m *Manager) OnGroupInvite(fn func(invite *protocol.GroupInvite, from string)) {
+	m.onGroupInvite = fn
+}
+func (m *Manager) OnPeerConnect(fn func(hostname string))           { m.onPeerConnect = fn }
+func (m *Manager) OnTyping(fn func(chatKey string, isTyping bool))  { m.onTyping = fn }
+func (m *Manager) OnReaction(fn func(chatKey string, msgID string)) { m.onReaction = fn }
+func (m *Manager) OnStatus(fn func(hostname string, state string))  { m.onStatus = fn }
 
 func (m *Manager) handleConnect(c *tcnet.Connection) {
 	if m.onPeerConnect != nil {
@@ -269,7 +287,10 @@ func (m *Manager) handleConnect(c *tcnet.Connection) {
 	if state == "" {
 		state = "available"
 	}
-	env, _ := protocol.Wrap(protocol.TypeStatus, &protocol.Status{State: state})
+	env, err := protocol.Wrap(protocol.TypeStatus, &protocol.Status{State: state})
+	if err != nil {
+		return
+	}
 	c.WriteMessage(env)
 }
 
@@ -334,13 +355,16 @@ func (m *Manager) handleChatMessage(c *tcnet.Connection, env *protocol.Envelope)
 	chatKey := c.PeerHostname
 	m.mu.Lock()
 	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.trimMessages(chatKey)
 	m.unread[chatKey]++
 	m.persistMessages(chatKey)
 	m.mu.Unlock()
 
 	ack := &protocol.Ack{MessageID: chatMsg.ID}
-	ackEnv, _ := protocol.Wrap(protocol.TypeAck, ack)
-	c.WriteMessage(ackEnv)
+	ackEnv, wrapErr := protocol.Wrap(protocol.TypeAck, ack)
+	if wrapErr == nil {
+		c.WriteMessage(ackEnv)
+	}
 
 	if m.onMessage != nil {
 		m.onMessage(chatKey, msg)
@@ -375,6 +399,7 @@ func (m *Manager) systemMessage(chatKey, text string) {
 	}
 	m.mu.Lock()
 	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.trimMessages(chatKey)
 	m.mu.Unlock()
 	if m.onMessage != nil {
 		m.onMessage(chatKey, msg)
@@ -383,7 +408,10 @@ func (m *Manager) systemMessage(chatKey, text string) {
 
 func (m *Manager) handlePing(c *tcnet.Connection) {
 	pong := &protocol.Pong{Timestamp: time.Now().UnixNano()}
-	env, _ := protocol.Wrap(protocol.TypePong, pong)
+	env, err := protocol.Wrap(protocol.TypePong, pong)
+	if err != nil {
+		return
+	}
 	c.WriteMessage(env)
 }
 
@@ -422,7 +450,7 @@ func (m *Manager) handleGroupChat(c *tcnet.Connection, env *protocol.Envelope) {
 
 	msg := Message{
 		ID:        groupMsg.ID,
-		Sender:    groupMsg.Sender,
+		Sender:    c.PeerHostname, // Use authenticated peer hostname, not self-reported sender
 		Content:   string(plaintext),
 		Timestamp: time.Unix(0, groupMsg.Timestamp),
 		IsOwn:     false,
@@ -433,6 +461,7 @@ func (m *Manager) handleGroupChat(c *tcnet.Connection, env *protocol.Envelope) {
 	chatKey := "group:" + groupMsg.GroupID
 	m.mu.Lock()
 	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.trimMessages(chatKey)
 	m.unread[chatKey]++
 	m.persistMessages(chatKey)
 	m.mu.Unlock()
@@ -564,6 +593,7 @@ func (m *Manager) SendMessage(peerHostname, content string) error {
 	}
 	m.mu.Lock()
 	m.messages[peerHostname] = append(m.messages[peerHostname], msg)
+	m.trimMessages(peerHostname)
 	m.persistMessages(peerHostname)
 	m.mu.Unlock()
 
@@ -582,7 +612,10 @@ func (m *Manager) SendTyping(chatKey string, isTyping bool) {
 		if conn == nil {
 			return
 		}
-		env, _ := protocol.Wrap(protocol.TypeTyping, &protocol.Typing{ChatKey: chatKey, IsTyping: isTyping})
+		env, err := protocol.Wrap(protocol.TypeTyping, &protocol.Typing{ChatKey: chatKey, IsTyping: isTyping})
+		if err != nil {
+			return
+		}
 		conn.WriteMessage(env)
 	}()
 }
@@ -667,7 +700,10 @@ func (m *Manager) SendReadReceipts(chatKey string) {
 		return
 	}
 	for _, id := range toSend {
-		env, _ := protocol.Wrap(protocol.TypeReadReceipt, &protocol.ReadReceipt{MessageID: id, ChatKey: chatKey})
+		env, err := protocol.Wrap(protocol.TypeReadReceipt, &protocol.ReadReceipt{MessageID: id, ChatKey: chatKey})
+		if err != nil {
+			continue
+		}
 		conn.WriteMessage(env)
 	}
 }
@@ -676,7 +712,10 @@ func (m *Manager) SetStatus(state string) {
 	m.mu.Lock()
 	m.peerStatus[m.hostname] = state
 	m.mu.Unlock()
-	env, _ := protocol.Wrap(protocol.TypeStatus, &protocol.Status{State: state})
+	env, err := protocol.Wrap(protocol.TypeStatus, &protocol.Status{State: state})
+	if err != nil {
+		return
+	}
 	for _, conn := range m.server.Connections() {
 		conn.WriteMessage(env)
 	}
@@ -744,6 +783,7 @@ func (m *Manager) SendFile(chatKey, filePath string) (string, error) {
 
 	m.mu.Lock()
 	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.trimMessages(chatKey)
 	m.persistMessages(chatKey)
 	m.mu.Unlock()
 
@@ -793,7 +833,11 @@ func (m *Manager) sendFileData(chatKey, filePath, msgID, transferID, checksum st
 		Checksum: checksum,
 		ChatKey:  chatKey,
 	}
-	offerEnv, _ := protocol.Wrap(protocol.TypeFileOffer, offer)
+	offerEnv, err := protocol.Wrap(protocol.TypeFileOffer, offer)
+	if err != nil {
+		m.updateFileSendState(chatKey, msgID, FileFailed, err.Error())
+		return
+	}
 	for _, c := range conns {
 		c.WriteMessage(offerEnv)
 	}
@@ -817,7 +861,11 @@ func (m *Manager) sendFileData(chatKey, filePath, msgID, transferID, checksum st
 				Offset: offset,
 				Data:   encoded,
 			}
-			chunkEnv, _ := protocol.Wrap(protocol.TypeFileData, chunk)
+			chunkEnv, wErr := protocol.Wrap(protocol.TypeFileData, chunk)
+			if wErr != nil {
+				m.updateFileSendState(chatKey, msgID, FileFailed, wErr.Error())
+				return
+			}
 			for _, c := range conns {
 				if writeErr := c.WriteMessage(chunkEnv); writeErr != nil {
 					m.updateFileSendState(chatKey, msgID, FileFailed, writeErr.Error())
@@ -837,7 +885,11 @@ func (m *Manager) sendFileData(chatKey, filePath, msgID, transferID, checksum st
 
 	// Send FileComplete
 	complete := &protocol.FileComplete{ID: transferID}
-	completeEnv, _ := protocol.Wrap(protocol.TypeFileComplete, complete)
+	completeEnv, err := protocol.Wrap(protocol.TypeFileComplete, complete)
+	if err != nil {
+		m.updateFileSendState(chatKey, msgID, FileFailed, err.Error())
+		return
+	}
 	for _, c := range conns {
 		c.WriteMessage(completeEnv)
 	}
@@ -916,6 +968,7 @@ func (m *Manager) handleFileOffer(c *tcnet.Connection, env *protocol.Envelope) {
 		file:     tmpFile,
 	}
 	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.trimMessages(chatKey)
 	m.unread[chatKey]++
 	m.persistMessages(chatKey)
 	m.mu.Unlock()
@@ -1062,10 +1115,9 @@ func (m *Manager) UpdateFileState(chatKey, msgID string, state FileState, errMsg
 	m.mu.Unlock()
 }
 
-
 func (m *Manager) ConnectToPeer(ip string) (*tcnet.Connection, error) {
 	addr := fmt.Sprintf("%s:%d", ip, tcnet.DefaultPort)
-	conn, err := tcnet.Connect(addr, m.keyPair, m.hostname)
+	conn, err := tcnet.Connect(addr, m.keyPair, m.hostname, m.knownKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -1093,7 +1145,7 @@ func (m *Manager) reconnectLoop() {
 					continue
 				}
 				addr := fmt.Sprintf("%s:%d", ip, tcnet.DefaultPort)
-				conn, err := tcnet.Connect(addr, m.keyPair, m.hostname)
+				conn, err := tcnet.Connect(addr, m.keyPair, m.hostname, m.knownKeys)
 				if err != nil {
 					continue
 				}
@@ -1162,10 +1214,14 @@ func (m *Manager) GetMessages(chatKey string) []Message {
 }
 
 func (m *Manager) CreateGroup(name string, memberHostnames []string) (*Group, error) {
+	// Copy the slice to avoid mutating the caller's underlying array.
+	members := make([]string, len(memberHostnames)+1)
+	copy(members, memberHostnames)
+	members[len(memberHostnames)] = m.hostname
 	group := &Group{
 		ID:      uuid.New().String(),
 		Name:    name,
-		Members: append(memberHostnames, m.hostname),
+		Members: members,
 	}
 	m.mu.Lock()
 	m.groups[group.ID] = group
@@ -1186,6 +1242,11 @@ func (m *Manager) CreateGroup(name string, memberHostnames []string) (*Group, er
 func (m *Manager) AcceptGroupInvite(invite *protocol.GroupInvite, fromHost string) {
 	group := &Group{ID: invite.GroupID, Name: invite.GroupName, Members: invite.Members}
 	m.mu.Lock()
+	if _, exists := m.groups[group.ID]; exists {
+		// Duplicate invite — already accepted this group.
+		m.mu.Unlock()
+		return
+	}
 	m.groups[group.ID] = group
 	m.persistGroups()
 	m.mu.Unlock()
@@ -1233,6 +1294,7 @@ func (m *Manager) SendGroupMessage(groupID, content string) error {
 	chatKey := "group:" + groupID
 	m.mu.Lock()
 	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.trimMessages(chatKey)
 	m.persistMessages(chatKey)
 	m.mu.Unlock()
 

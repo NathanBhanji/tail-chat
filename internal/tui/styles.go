@@ -14,23 +14,11 @@ var (
 	text      = lipgloss.Color("#F9FAFB") // near white
 	dimText   = lipgloss.Color("#9CA3AF") // light gray
 
-	// App frame
-	appStyle = lipgloss.NewStyle().
-			Padding(0, 1)
-
-	// Title bar
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(text).
-			Background(primary).
-			Padding(0, 2).
-			MarginBottom(1)
-
-	// Sidebar
-	sidebarStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(muted).
-			Padding(0, 1)
+	// Sidebar divider border — right side only
+	dividerBorder = lipgloss.Border{
+		Top: "", Bottom: "", Left: "", Right: "│",
+		TopLeft: "", TopRight: "", BottomLeft: "", BottomRight: "",
+	}
 
 	sidebarTitle = lipgloss.NewStyle().
 			Bold(true).
@@ -54,21 +42,6 @@ var (
 			Foreground(text).
 			Padding(0, 1)
 
-	// Chat area
-	chatStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(muted).
-			Padding(0, 1)
-
-	chatHeader = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(primary).
-			BorderBottom(true).
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(muted).
-			MarginBottom(1).
-			Width(100)
-
 	// Messages
 	ownMsgStyle = lipgloss.NewStyle().
 			Foreground(secondary)
@@ -81,17 +54,6 @@ var (
 
 	msgContentStyle = lipgloss.NewStyle().
 			Foreground(text)
-
-	// Input
-	inputStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(primary).
-			Padding(0, 1)
-
-	// Status bar
-	statusBarStyle = lipgloss.NewStyle().
-			Foreground(dimText).
-			MarginTop(1)
 
 	// Help
 	helpStyle = lipgloss.NewStyle().
@@ -140,11 +102,6 @@ var (
 	// Tailchat online (running tailchat but not yet connected)
 	tailchatOnline = lipgloss.NewStyle().
 			Foreground(secondary)
-
-	// Tailchat badge label
-	tailchatBadge = lipgloss.NewStyle().
-			Foreground(secondary).
-			Italic(true)
 
 	// Typing indicator
 	typingStyle = lipgloss.NewStyle().
@@ -203,24 +160,28 @@ var (
 			Foreground(secondary).
 			Bold(true)
 
-	// Sidebar focus indicators
+	// Sidebar focus styles — right-border-only divider
 	sidebarFocused = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
+			Border(dividerBorder, false, true, false, false).
 			BorderForeground(primary).
 			Padding(0, 1)
 
 	sidebarBlurred = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
+			Border(dividerBorder, false, true, false, false).
 			BorderForeground(muted).
 			Padding(0, 1)
 
-	chatFocused = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(primary).
-			Padding(0, 1)
+	// Chat pane — no border, just left padding
+	chatPane = lipgloss.NewStyle().
+			PaddingLeft(1)
 
-	chatBlurred = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(muted).
-			Padding(0, 1)
+	// Prompt style for > prefix
+	promptStyle = lipgloss.NewStyle().
+			Foreground(primary).
+			Bold(true)
+
+	// Active chat indicator in sidebar
+	activeChatStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(secondary)
 )

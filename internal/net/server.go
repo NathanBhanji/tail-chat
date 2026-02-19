@@ -5,10 +5,24 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/NathanBhanji/tail-chat/internal/crypto"
 	"github.com/NathanBhanji/tail-chat/internal/protocol"
 )
+
+const (
+	// HandshakeTimeout is the maximum time to complete a handshake.
+	HandshakeTimeout = 10 * time.Second
+	// ReadTimeout is the deadline for reading a single message.
+	ReadTimeout = 5 * time.Minute
+	// MaxConnections limits the number of concurrent peer connections.
+	MaxConnections = 128
+)
+
+// HostnameResolver resolves a Tailscale IP to its authenticated hostname.
+// Returns empty string if the IP is not recognized.
+type HostnameResolver func(ip string) string
 
 const DefaultPort = 9377
 
@@ -30,30 +44,34 @@ func (c *Connection) WriteMessage(env *protocol.Envelope) error {
 
 // Server listens for incoming peer connections.
 type Server struct {
-	listener   net.Listener
-	keyPair    *crypto.KeyPair
-	hostname   string
-	mu         sync.RWMutex
-	conns      map[string]*Connection // hostname -> connection
-	onConnect    func(*Connection)
-	onMessage    func(*Connection, *protocol.Envelope)
-	onDisconnect func(hostname string)
-	stopCh       chan struct{}
+	listener        net.Listener
+	keyPair         *crypto.KeyPair
+	knownKeys       *crypto.KnownKeys
+	hostname        string
+	mu              sync.RWMutex
+	conns           map[string]*Connection // hostname -> connection
+	onConnect       func(*Connection)
+	onMessage       func(*Connection, *protocol.Envelope)
+	onDisconnect    func(hostname string)
+	onKeyWarning    func(hostname string, err error) // TOFU key change warning
+	resolveHostname HostnameResolver
+	stopCh          chan struct{}
 }
 
 // NewServer creates a TCP server bound to the given address.
-func NewServer(addr string, kp *crypto.KeyPair, hostname string) (*Server, error) {
+func NewServer(addr string, kp *crypto.KeyPair, hostname string, knownKeys *crypto.KnownKeys) (*Server, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
 	}
 
 	return &Server{
-		listener: ln,
-		keyPair:  kp,
-		hostname: hostname,
-		conns:    make(map[string]*Connection),
-		stopCh:   make(chan struct{}),
+		listener:  ln,
+		keyPair:   kp,
+		knownKeys: knownKeys,
+		hostname:  hostname,
+		conns:     make(map[string]*Connection),
+		stopCh:    make(chan struct{}),
 	}, nil
 }
 
@@ -72,6 +90,16 @@ func (s *Server) OnDisconnect(fn func(hostname string)) {
 	s.onDisconnect = fn
 }
 
+// OnKeyWarning sets a callback for TOFU key change warnings.
+func (s *Server) OnKeyWarning(fn func(hostname string, err error)) {
+	s.onKeyWarning = fn
+}
+
+// SetHostnameResolver configures IP-to-hostname resolution for hostname verification.
+func (s *Server) SetHostnameResolver(fn HostnameResolver) {
+	s.resolveHostname = fn
+}
+
 // Addr returns the server's listen address.
 func (s *Server) Addr() string {
 	return s.listener.Addr().String()
@@ -83,6 +111,7 @@ func (s *Server) Start() {
 }
 
 func (s *Server) acceptLoop() {
+	connSem := make(chan struct{}, MaxConnections)
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
@@ -94,11 +123,25 @@ func (s *Server) acceptLoop() {
 				continue
 			}
 		}
-		go s.handleConn(conn)
+
+		// Enforce connection limit
+		select {
+		case connSem <- struct{}{}:
+			go func() {
+				defer func() { <-connSem }()
+				s.handleConn(conn)
+			}()
+		default:
+			log.Printf("connection limit reached (%d), rejecting %s", MaxConnections, conn.RemoteAddr())
+			conn.Close()
+		}
 	}
 }
 
 func (s *Server) handleConn(conn net.Conn) {
+	// Enforce handshake timeout
+	conn.SetDeadline(time.Now().Add(HandshakeTimeout))
+
 	// Receive peer's handshake
 	env, err := protocol.ReadMessage(conn)
 	if err != nil {
@@ -113,6 +156,12 @@ func (s *Server) handleConn(conn net.Conn) {
 
 	hs, err := protocol.Unwrap[protocol.Handshake](env)
 	if err != nil {
+		conn.Close()
+		return
+	}
+
+	// Validate public key length
+	if len(hs.PublicKey) != 32 {
 		conn.Close()
 		return
 	}
@@ -135,9 +184,33 @@ func (s *Server) handleConn(conn net.Conn) {
 		return
 	}
 
+	// Clear handshake deadline
+	conn.SetDeadline(time.Time{})
+
 	// Derive shared secret
 	var peerPub [32]byte
 	copy(peerPub[:], hs.PublicKey)
+
+	// TOFU: verify peer's public key against known keys
+	if s.knownKeys != nil {
+		if err := s.knownKeys.Verify(hs.Hostname, peerPub); err != nil {
+			if s.onKeyWarning != nil {
+				s.onKeyWarning(hs.Hostname, err)
+			}
+			conn.Close()
+			return
+		}
+	}
+
+	// Hostname verification: verify the claimed hostname matches the remote IP.
+	if s.resolveHostname != nil {
+		remoteHost, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+		if expected := s.resolveHostname(remoteHost); expected != "" && expected != hs.Hostname {
+			log.Printf("hostname mismatch: peer at %s claims to be %q but Tailscale says %q", remoteHost, hs.Hostname, expected)
+			conn.Close()
+			return
+		}
+	}
 
 	shared, err := crypto.SharedSecret(s.keyPair.PrivateKey, peerPub)
 	if err != nil {
@@ -153,6 +226,9 @@ func (s *Server) handleConn(conn net.Conn) {
 	}
 
 	s.mu.Lock()
+	if old, ok := s.conns[hs.Hostname]; ok && old != c {
+		old.Conn.Close()
+	}
 	s.conns[hs.Hostname] = c
 	s.mu.Unlock()
 
@@ -180,6 +256,7 @@ func (s *Server) readLoop(c *Connection) {
 	}()
 
 	for {
+		c.Conn.SetReadDeadline(time.Now().Add(ReadTimeout))
 		env, err := protocol.ReadMessage(c.Conn)
 		if err != nil {
 			return
@@ -201,6 +278,9 @@ func (s *Server) GetConnection(hostname string) *Connection {
 // AddConnection registers an outbound connection.
 func (s *Server) AddConnection(c *Connection) {
 	s.mu.Lock()
+	if old, ok := s.conns[c.PeerHostname]; ok && old != c {
+		old.Conn.Close()
+	}
 	s.conns[c.PeerHostname] = c
 	s.mu.Unlock()
 

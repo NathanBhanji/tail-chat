@@ -27,24 +27,24 @@ func setupPair(t *testing.T) (alice *chat.Manager, bob *chat.Manager, cleanup fu
 		t.Fatalf("generate bob key: %v", err)
 	}
 
-	srvA, err := tcnet.NewServer("127.0.0.1:0", kpA, "alice")
+	srvA, err := tcnet.NewServer("127.0.0.1:0", kpA, "alice", nil)
 	if err != nil {
 		t.Fatalf("server alice: %v", err)
 	}
 	srvA.Start()
 
-	srvB, err := tcnet.NewServer("127.0.0.1:0", kpB, "bob")
+	srvB, err := tcnet.NewServer("127.0.0.1:0", kpB, "bob", nil)
 	if err != nil {
 		srvA.Stop()
 		t.Fatalf("server bob: %v", err)
 	}
 	srvB.Start()
 
-	alice = chat.NewManager(srvA, kpA, "alice", nil)
-	bob = chat.NewManager(srvB, kpB, "bob", nil)
+	alice = chat.NewManager(srvA, kpA, "alice", nil, nil)
+	bob = chat.NewManager(srvB, kpB, "bob", nil, nil)
 
 	// Connect alice -> bob
-	conn, err := tcnet.Connect(srvB.Addr(), kpA, "alice")
+	conn, err := tcnet.Connect(srvB.Addr(), kpA, "alice", nil)
 	if err != nil {
 		srvA.Stop()
 		srvB.Stop()
@@ -1048,13 +1048,13 @@ func setupPairWithStore(t *testing.T) (alice *chat.Manager, bob *chat.Manager, s
 		t.Fatalf("generate bob key: %v", err)
 	}
 
-	srvA, err := tcnet.NewServer("127.0.0.1:0", kpA, "alice")
+	srvA, err := tcnet.NewServer("127.0.0.1:0", kpA, "alice", nil)
 	if err != nil {
 		t.Fatalf("server alice: %v", err)
 	}
 	srvA.Start()
 
-	srvB, err := tcnet.NewServer("127.0.0.1:0", kpB, "bob")
+	srvB, err := tcnet.NewServer("127.0.0.1:0", kpB, "bob", nil)
 	if err != nil {
 		srvA.Stop()
 		t.Fatalf("server bob: %v", err)
@@ -1069,10 +1069,10 @@ func setupPairWithStore(t *testing.T) (alice *chat.Manager, bob *chat.Manager, s
 		t.Fatalf("create store: %v", err)
 	}
 
-	alice = chat.NewManager(srvA, kpA, "alice", store)
-	bob = chat.NewManager(srvB, kpB, "bob", nil)
+	alice = chat.NewManager(srvA, kpA, "alice", store, nil)
+	bob = chat.NewManager(srvB, kpB, "bob", nil, nil)
 
-	conn, err := tcnet.Connect(srvB.Addr(), kpA, "alice")
+	conn, err := tcnet.Connect(srvB.Addr(), kpA, "alice", nil)
 	if err != nil {
 		srvA.Stop()
 		srvB.Stop()

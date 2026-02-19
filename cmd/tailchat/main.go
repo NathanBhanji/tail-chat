@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -46,28 +47,50 @@ func run() error {
 		return fmt.Errorf("tailscale not running? %w", err)
 	}
 
+	// Load TOFU known keys
+	knownKeys, err := crypto.LoadKnownKeys()
+	if err != nil {
+		return fmt.Errorf("known keys: %w", err)
+	}
+
 	// Start TCP server
 	listenAddr := fmt.Sprintf("%s:%d", selfIP, tcnet.DefaultPort)
-	server, err := tcnet.NewServer(listenAddr, kp, selfHost)
+	server, err := tcnet.NewServer(listenAddr, kp, selfHost, knownKeys)
 	if err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
 	server.Start()
 	defer server.Stop()
 
-	// Create bubbletea program (we need it for sending messages to the TUI)
-	var program *tea.Program
+	// Create bubbletea program (we need it for sending messages to the TUI).
+	// Use atomic.Pointer to avoid data race between main goroutine and callbacks.
+	var programPtr atomic.Pointer[tea.Program]
+
+	// sendToProgram safely sends a message to the TUI if it's ready.
+	sendToProgram := func(msg tea.Msg) {
+		if p := programPtr.Load(); p != nil {
+			p.Send(msg)
+		}
+	}
 
 	// Start peer discovery
 	watcher := discovery.NewWatcher(10*time.Second, func(peers []discovery.Peer) {
-		if program != nil {
-			program.Send(tui.PeersUpdatedMsg{Peers: peers})
-		}
+		sendToProgram(tui.PeersUpdatedMsg{Peers: peers})
 	})
 	if err := watcher.Start(); err != nil {
 		return fmt.Errorf("peer discovery: %w", err)
 	}
 	defer watcher.Stop()
+
+	// Wire hostname verification: resolve Tailscale IP -> authenticated hostname.
+	server.SetHostnameResolver(func(ip string) string {
+		for _, p := range watcher.Peers() {
+			if p.TailscaleIP == ip {
+				return p.Hostname
+			}
+		}
+		return "" // unknown IP — allow (may be a new peer not yet in discovery)
+	})
 
 	// Create persistence store
 	store, err := storage.New("")
@@ -76,51 +99,40 @@ func run() error {
 	}
 
 	// Create chat manager
-	chatMgr := chat.NewManager(server, kp, selfHost, store)
+	chatMgr := chat.NewManager(server, kp, selfHost, store, knownKeys)
 	defer chatMgr.Stop()
 
 	// Wire message callbacks to TUI
 	chatMgr.OnMessage(func(chatKey string, msg chat.Message) {
-		if program != nil {
-			program.Send(tui.IncomingMsg{ChatKey: chatKey, Message: msg})
-		}
+		sendToProgram(tui.IncomingMsg{ChatKey: chatKey, Message: msg})
 	})
 
 	chatMgr.OnGroupInvite(func(invite *protocol.GroupInvite, from string) {
-		if program != nil {
-			program.Send(tui.GroupInviteMsg{Invite: invite, From: from})
-		}
+		sendToProgram(tui.GroupInviteMsg{Invite: invite, From: from})
 	})
 
 	chatMgr.OnPeerConnect(func(hostname string) {
-		if program != nil {
-			program.Send(tui.PeerConnectMsg{Hostname: hostname})
-		}
+		sendToProgram(tui.PeerConnectMsg{Hostname: hostname})
 	})
 
 	chatMgr.OnTyping(func(chatKey string, isTyping bool) {
-		if program != nil {
-			program.Send(tui.TypingMsg{ChatKey: chatKey, IsTyping: isTyping})
-		}
+		sendToProgram(tui.TypingMsg{ChatKey: chatKey, IsTyping: isTyping})
 	})
 
 	chatMgr.OnReaction(func(chatKey string, msgID string) {
-		if program != nil {
-			program.Send(tui.ReactionUpdatedMsg{ChatKey: chatKey})
-		}
+		sendToProgram(tui.ReactionUpdatedMsg{ChatKey: chatKey})
 	})
 
 	chatMgr.OnStatus(func(hostname string, state string) {
-		if program != nil {
-			program.Send(tui.StatusUpdatedMsg{Hostname: hostname, State: state})
-		}
+		sendToProgram(tui.StatusUpdatedMsg{Hostname: hostname, State: state})
 	})
 
 	// Create and run TUI
 	model := tui.NewModel(chatMgr, watcher)
-	program = tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	programPtr.Store(p)
 
-	if _, err := program.Run(); err != nil {
+	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("tui: %w", err)
 	}
 

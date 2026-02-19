@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/NathanBhanji/tail-chat/internal/chat"
 	"github.com/NathanBhanji/tail-chat/internal/discovery"
@@ -118,6 +119,7 @@ type Model struct {
 	// Sidebar state
 	peers          []discovery.Peer
 	peerCursor     int
+	cursorIdentity string // hostname or "group:ID" the cursor was on
 	connecting     string
 	connectingDots int
 
@@ -196,7 +198,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		sw := m.sidebarWidth()
-		m.input.Width = m.width - sw - 8
+		m.input.Width = m.width - sw - 8 // approximate; renderChat overrides
 		return m, nil
 
 	case IncomingMsg:
@@ -234,6 +236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PeersUpdatedMsg:
 		m.peers = msg.Peers
+		m.clampCursor()
 		return m, nil
 
 	case ConnectedMsg:
@@ -276,6 +279,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.connectingDots = (m.connectingDots + 1) % 4
 		}
 		m.peers = m.peerWatcher.Peers()
+		m.clampCursor()
 		if m.activeChatKey != "" {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
 		}
@@ -297,6 +301,52 @@ func (m Model) sidebarWidth() int {
 		sw = 35
 	}
 	return sw
+}
+
+// clampCursor ensures peerCursor is within bounds after list changes.
+// It tries to restore the cursor to the same peer/group by identity.
+func (m *Model) clampCursor() {
+	groups := m.chatMgr.Groups()
+	totalItems := len(m.peers) + len(groups)
+	if totalItems == 0 {
+		m.peerCursor = 0
+		m.cursorIdentity = ""
+		return
+	}
+
+	// Try to find the previously selected item by identity
+	if m.cursorIdentity != "" {
+		for i, p := range m.peers {
+			if p.Hostname == m.cursorIdentity {
+				m.peerCursor = i
+				return
+			}
+		}
+		for i, g := range groups {
+			if "group:"+g.ID == m.cursorIdentity {
+				m.peerCursor = len(m.peers) + i
+				return
+			}
+		}
+	}
+
+	// Identity not found; just clamp to valid range
+	if m.peerCursor >= totalItems {
+		m.peerCursor = totalItems - 1
+	}
+}
+
+// updateCursorIdentity records the identity of the item under the cursor.
+func (m *Model) updateCursorIdentity() {
+	groups := m.chatMgr.Groups()
+	if m.peerCursor < len(m.peers) {
+		m.cursorIdentity = m.peers[m.peerCursor].Hostname
+	} else {
+		gi := m.peerCursor - len(m.peers)
+		if gi >= 0 && gi < len(groups) {
+			m.cursorIdentity = "group:" + groups[gi].ID
+		}
+	}
 }
 
 // openChat sets up the model to display a chat.
@@ -366,11 +416,13 @@ func (m Model) handleSidebarKeys(key string) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.peerCursor > 0 {
 			m.peerCursor--
+			m.updateCursorIdentity()
 		}
 
 	case "down", "j":
 		if m.peerCursor < totalItems-1 {
 			m.peerCursor++
+			m.updateCursorIdentity()
 		}
 
 	case "enter", "l":
@@ -379,6 +431,7 @@ func (m Model) handleSidebarKeys(key string) (tea.Model, tea.Cmd) {
 	case "g":
 		if m.lastKey == "g" && time.Since(m.lastKeyTime) < 500*time.Millisecond {
 			m.peerCursor = 0
+			m.updateCursorIdentity()
 			m.lastKey = ""
 			return m, nil
 		}
@@ -389,6 +442,7 @@ func (m Model) handleSidebarKeys(key string) (tea.Model, tea.Cmd) {
 	case "G":
 		if totalItems > 0 {
 			m.peerCursor = totalItems - 1
+			m.updateCursorIdentity()
 		}
 
 	case "/":
@@ -833,7 +887,7 @@ func (m Model) View() string {
 	}
 
 	sw := m.sidebarWidth()
-	chatWidth := m.width - sw - 3 // borders + padding
+	chatWidth := m.width - sw
 
 	sidebar := m.renderSidebar(sw)
 	var rightPane string
@@ -853,8 +907,8 @@ func (m Model) View() string {
 }
 
 func (m Model) renderSidebar(width int) string {
-	h := m.height - 2 // border
-	innerW := width - 4 // border + padding
+	h := m.height
+	innerW := width - 3 // 1 border-right + 2 padding
 
 	var b strings.Builder
 
@@ -918,7 +972,7 @@ func (m Model) renderSidebar(width int) string {
 		if idx == m.peerCursor && m.focusPane == PaneSidebar {
 			b.WriteString(peerSelected.Render(line))
 		} else if peer.Hostname == m.activeChatKey {
-			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(text).Render(line))
+			b.WriteString(activeChatStyle.Render("\u2192 " + line))
 		} else {
 			b.WriteString(peerNormal.Render(line))
 		}
@@ -950,7 +1004,7 @@ func (m Model) renderSidebar(width int) string {
 			if idx == m.peerCursor && m.focusPane == PaneSidebar {
 				b.WriteString(peerSelected.Render(line))
 			} else if chatKey == m.activeChatKey {
-				b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(text).Render(line))
+				b.WriteString(activeChatStyle.Render("\u2192 " + line))
 			} else {
 				b.WriteString(peerNormal.Render(line))
 			}
@@ -982,16 +1036,16 @@ func (m Model) renderSidebar(width int) string {
 		b.WriteString(helpStyle.Render("tab \u2190 focus"))
 	}
 
-	style := sidebarBlurred.Width(width - 2).Height(h)
+	style := sidebarBlurred.Width(innerW).Height(h)
 	if m.focusPane == PaneSidebar {
-		style = sidebarFocused.Width(width - 2).Height(h)
+		style = sidebarFocused.Width(innerW).Height(h)
 	}
 	return style.Render(b.String())
 }
 
 func (m Model) renderChat(width int) string {
-	h := m.height - 2
-	innerW := width - 4
+	h := m.height
+	innerW := width - 1 // 1 left-padding
 
 	var b strings.Builder
 
@@ -1016,7 +1070,9 @@ func (m Model) renderChat(width int) string {
 
 	header := fmt.Sprintf("%s%s %s", chatName, peerStatus, encryptedBadge.Render("\U0001f512"))
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primary).Render(truncate(header, innerW)))
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render(strings.Repeat("\u2500", innerW)))
+	b.WriteString("\n")
 
 	// Calculate space
 	extraLines := 0
@@ -1034,7 +1090,7 @@ func (m Model) renderChat(width int) string {
 		extraLines++
 	}
 
-	availHeight := h - 7 - extraLines
+	availHeight := h - 6 - extraLines
 	if availHeight < 3 {
 		availHeight = 3
 	}
@@ -1049,13 +1105,28 @@ func (m Model) renderChat(width int) string {
 		endIdx = 0
 	}
 
+	// Calculate how many display lines each message takes
+	maxContentW := innerW - 9 // " HH:MM sender: " approximate prefix width
+	if maxContentW < 10 {
+		maxContentW = 10
+	}
+
+	msgLineCount := func(msg chat.Message) int {
+		lines := 1
+		if msg.FileInfo == nil && msg.Sender != "system" && len(msg.Content) > maxContentW {
+			wrapped := lipgloss.NewStyle().Width(maxContentW).Render(msg.Content)
+			lines = strings.Count(wrapped, "\n") + 1
+		}
+		if len(msg.Reactions) > 0 {
+			lines++
+		}
+		return lines
+	}
+
 	linesUsed := 0
 	startIdx := endIdx
 	for i := endIdx - 1; i >= 0; i-- {
-		lines := 1
-		if len(msgs[i].Reactions) > 0 {
-			lines++
-		}
+		lines := msgLineCount(msgs[i])
 		if linesUsed+lines > availHeight {
 			break
 		}
@@ -1103,10 +1174,15 @@ func (m Model) renderChat(width int) string {
 		}
 
 		rendered := renderContent(msg.Content)
-		b.WriteString(fmt.Sprintf(" %s %s: %s%s\n", ts, sender, rendered, tick))
+		if len(msg.Content) > maxContentW {
+			wrapped := lipgloss.NewStyle().Width(maxContentW).Render(rendered)
+			b.WriteString(fmt.Sprintf(" %s %s: %s%s\n", ts, sender, wrapped, tick))
+		} else {
+			b.WriteString(fmt.Sprintf(" %s %s: %s%s\n", ts, sender, rendered, tick))
+		}
 
 		if len(msg.Reactions) > 0 {
-			b.WriteString(fmt.Sprintf(" %s %s\n", strings.Repeat(" ", 5), renderReactions(msg.Reactions)))
+			b.WriteString(fmt.Sprintf("%s%s\n", strings.Repeat(" ", 8), renderReactions(msg.Reactions)))
 		}
 	}
 
@@ -1156,24 +1232,20 @@ func (m Model) renderChat(width int) string {
 		b.WriteString("\n")
 	}
 
-	// Input
-	m.input.Width = innerW - 2
-	b.WriteString(inputStyle.Width(innerW).Render(m.input.View()))
+	// Input with > prompt
+	m.input.Width = innerW - 3
+	b.WriteString(promptStyle.Render("> ") + m.input.View())
 	b.WriteString("\n")
 
 	// Help
 	b.WriteString(helpStyle.Render(" enter send \u2022 /react /file \u2022 esc \u2190"))
 
-	style := chatBlurred.Width(width - 2).Height(h)
-	if m.focusPane == PaneChat {
-		style = chatFocused.Width(width - 2).Height(h)
-	}
-	return style.Render(b.String())
+	return chatPane.Width(innerW).Height(h).Render(b.String())
 }
 
 func (m Model) renderEmpty(width int) string {
-	h := m.height - 2
-	innerW := width - 4
+	h := m.height
+	innerW := width - 1
 
 	var b strings.Builder
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primary).Render("tailchat"))
@@ -1202,13 +1274,12 @@ func (m Model) renderEmpty(width int) string {
 		b.WriteString("\n")
 	}
 
-	style := chatBlurred.Width(width - 2).Height(h)
-	return style.Render(b.String())
+	return chatPane.Width(innerW).Height(h).Render(b.String())
 }
 
 func (m Model) renderGroupCreate(width int) string {
-	h := m.height - 2
-	innerW := width - 4
+	h := m.height
+	innerW := width - 1
 
 	var b strings.Builder
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primary).Render("New Group"))
@@ -1216,8 +1287,8 @@ func (m Model) renderGroupCreate(width int) string {
 
 	if m.groupName == "" {
 		b.WriteString("Enter group name:\n\n")
-		m.input.Width = innerW - 2
-		b.WriteString(inputStyle.Width(innerW).Render(m.input.View()))
+		m.input.Width = innerW - 3
+		b.WriteString(promptStyle.Render("> ") + m.input.View())
 		b.WriteString("\n\n")
 		b.WriteString(helpStyle.Render("enter confirm \u2022 esc cancel"))
 	} else {
@@ -1266,13 +1337,12 @@ func (m Model) renderGroupCreate(width int) string {
 		content += "\n"
 	}
 
-	style := chatFocused.Width(width - 2).Height(h)
-	return style.Render(content)
+	return chatPane.Width(innerW).Height(h).Render(content)
 }
 
 func (m Model) renderSearch(width int) string {
-	h := m.height - 2
-	innerW := width - 4
+	h := m.height
+	innerW := width - 1
 
 	var b strings.Builder
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(primary).Render("Search"))
@@ -1280,8 +1350,8 @@ func (m Model) renderSearch(width int) string {
 
 	if !m.searchDone {
 		b.WriteString("Enter search query:\n\n")
-		m.input.Width = innerW - 2
-		b.WriteString(inputStyle.Width(innerW).Render(m.input.View()))
+		m.input.Width = innerW - 3
+		b.WriteString(promptStyle.Render("> ") + m.input.View())
 		b.WriteString("\n\n")
 		b.WriteString(helpStyle.Render("enter search \u2022 esc cancel"))
 	} else {
@@ -1325,8 +1395,7 @@ func (m Model) renderSearch(width int) string {
 		content += "\n"
 	}
 
-	style := chatFocused.Width(width - 2).Height(h)
-	return style.Render(content)
+	return chatPane.Width(innerW).Height(h).Render(content)
 }
 
 // --- Helpers ---
@@ -1418,9 +1487,8 @@ func truncate(s string, max int) string {
 	if max < 4 {
 		max = 4
 	}
-	runes := []rune(s)
-	if len(runes) <= max {
+	if runewidth.StringWidth(s) <= max {
 		return s
 	}
-	return string(runes[:max-3]) + "..."
+	return runewidth.Truncate(s, max, "...")
 }

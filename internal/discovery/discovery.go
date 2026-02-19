@@ -213,3 +213,12 @@ func (w *Watcher) SelfIP() string {
 func (w *Watcher) SelfHostname() string {
 	return w.selfHost
 }
+
+// NewTestWatcher creates a Watcher with fixed data for testing (no Tailscale needed).
+func NewTestWatcher(selfHost string, peers []Peer) *Watcher {
+	return &Watcher{
+		selfHost: selfHost,
+		peers:    peers,
+		stopCh:   make(chan struct{}),
+	}
+}
