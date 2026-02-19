@@ -61,15 +61,17 @@ type Model struct {
 	peerWatcher *discovery.Watcher
 
 	// State
-	view         View
-	peers        []discovery.Peer
-	peerCursor   int
-	activeChatKey string // hostname or "group:<id>"
-	messages     []chat.Message
-	width        int
-	height       int
-	err          string
-	errExpiry    time.Time
+	view           View
+	peers          []discovery.Peer
+	peerCursor     int
+	activeChatKey  string // hostname or "group:<id>"
+	messages       []chat.Message
+	width          int
+	height         int
+	err            string
+	errExpiry      time.Time
+	connecting     string // hostname we're currently connecting to
+	connectingDots int    // animation counter
 
 	// Group creation
 	groupName    string
@@ -105,7 +107,7 @@ func NewModel(chatMgr *chat.Manager, watcher *discovery.Watcher) Model {
 }
 
 func tickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
 }
@@ -138,8 +140,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ConnectedMsg:
+		m.connecting = ""
 		if msg.Err != nil {
-			m.err = fmt.Sprintf("Connection failed: %v", msg.Err)
+			m.err = fmt.Sprintf("Connection to %s failed: peer may not be running tailchat", msg.Hostname)
 			m.errExpiry = time.Now().Add(5 * time.Second)
 		} else {
 			m.err = ""
@@ -147,6 +150,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeChatKey = msg.Hostname
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
 			m.view = ViewChat
+			m.input.Placeholder = "Type a message..."
+			m.input.SetValue("")
 			m.input.Focus()
 		}
 		return m, nil
@@ -167,6 +172,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Clear expired errors
 		if m.err != "" && time.Now().After(m.errExpiry) {
 			m.err = ""
+		}
+		// Animate connecting dots
+		if m.connecting != "" {
+			m.connectingDots = (m.connectingDots + 1) % 4
 		}
 		// Refresh peers
 		m.peers = m.peerWatcher.Peers()
@@ -272,9 +281,16 @@ func (m Model) selectPeerItem() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Connect
+		// Don't double-connect
+		if m.connecting != "" {
+			return m, nil
+		}
+
+		// Connect (async — UI stays responsive)
 		ip := peer.TailscaleIP
 		hostname := peer.Hostname
+		m.connecting = hostname
+		m.connectingDots = 0
 		return m, func() tea.Msg {
 			_, err := m.chatMgr.ConnectToPeer(ip)
 			return ConnectedMsg{Hostname: hostname, Err: err}
@@ -496,6 +512,14 @@ func (m Model) viewPeers() string {
 			b.WriteString("\n")
 			idx++
 		}
+	}
+
+	// Connecting indicator
+	if m.connecting != "" {
+		dots := strings.Repeat(".", m.connectingDots+1)
+		b.WriteString("\n")
+		b.WriteString(connectingStyle.Render(fmt.Sprintf("  Connecting to %s%s", m.connecting, dots)))
+		b.WriteString("\n")
 	}
 
 	// Error
