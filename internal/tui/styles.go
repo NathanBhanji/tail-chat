@@ -136,4 +136,13 @@ var (
 	gifLabel = lipgloss.NewStyle().
 			Foreground(warning).
 			Bold(true)
+
+	// Tailchat online (running tailchat but not yet connected)
+	tailchatOnline = lipgloss.NewStyle().
+			Foreground(secondary)
+
+	// Tailchat badge label
+	tailchatBadge = lipgloss.NewStyle().
+			Foreground(secondary).
+			Italic(true)
 )

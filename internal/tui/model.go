@@ -135,12 +135,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case IncomingMsg:
 		if m.view == ViewChat && msg.ChatKey == m.activeChatKey {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
+			return m, nil
 		}
-		// Always return so the view re-renders (unread badges update)
-		return m, nil
+		// Message arrived for a chat we're not viewing — notify
+		return m, notifyCmd(msg.Message.Sender, msg.Message.Content)
 
 	case PeerConnectMsg:
 		// A peer connected inbound — refresh so the lock icon shows up
+		return m, nil
+
+	case NotifyMsg:
+		// Notification delivered — nothing to do
 		return m, nil
 
 	case MessageSentMsg:
@@ -495,9 +500,16 @@ func (m Model) viewPeers() string {
 
 	idx := 0
 	for _, peer := range m.peers {
-		dot := peerOffline.Render("○")
-		if peer.Online {
-			dot = peerOnline.Render("●")
+		var dot string
+		switch {
+		case m.chatMgr.IsConnected(peer.Hostname):
+			dot = encryptedBadge.Render("●") // green — connected + encrypted
+		case peer.RunningTailchat:
+			dot = tailchatOnline.Render("●") // cyan — running tailchat
+		case peer.Online:
+			dot = peerOnline.Render("○") // green outline — online on tailscale only
+		default:
+			dot = peerOffline.Render("○") // gray — offline
 		}
 
 		connStatus := ""
@@ -510,7 +522,12 @@ func (m Model) viewPeers() string {
 			unreadBadge = unreadStyle.Render(fmt.Sprintf(" (%d)", n))
 		}
 
-		name := fmt.Sprintf("%s %s  %s%s%s", dot, peer.Hostname, helpStyle.Render(peer.TailscaleIP), connStatus, unreadBadge)
+		tcBadge := ""
+		if peer.RunningTailchat && !m.chatMgr.IsConnected(peer.Hostname) {
+			tcBadge = tailchatBadge.Render(" [tailchat]")
+		}
+
+		name := fmt.Sprintf("%s %s  %s%s%s%s", dot, peer.Hostname, helpStyle.Render(peer.TailscaleIP), connStatus, tcBadge, unreadBadge)
 
 		if idx == m.peerCursor {
 			b.WriteString(peerSelected.Render(name))
@@ -557,7 +574,10 @@ func (m Model) viewPeers() string {
 
 	// Help
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("  j/k navigate • enter connect/open • g new group • r refresh • q quit"))
+	b.WriteString(helpStyle.Render("  j/k navigate • enter connect • g new group • r refresh • q quit"))
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render(fmt.Sprintf("  %s connected  %s tailchat  %s online  %s offline",
+		encryptedBadge.Render("●"), tailchatOnline.Render("●"), peerOnline.Render("○"), peerOffline.Render("○"))))
 
 	return appStyle.Render(b.String())
 }
