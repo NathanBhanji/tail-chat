@@ -67,9 +67,12 @@ func run() error {
 	var programPtr atomic.Pointer[tea.Program]
 
 	// sendToProgram safely sends a message to the TUI if it's ready.
+	// The send runs in a goroutine to prevent deadlocks: callbacks may fire
+	// from within bubbletea's Update() call, and p.Send() blocks on an
+	// unbuffered channel that Update() is not draining until it returns.
 	sendToProgram := func(msg tea.Msg) {
 		if p := programPtr.Load(); p != nil {
-			p.Send(msg)
+			go p.Send(msg)
 		}
 	}
 

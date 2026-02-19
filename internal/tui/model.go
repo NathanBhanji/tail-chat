@@ -616,17 +616,27 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Handle /react command
+		// Handle /react command — must run async to avoid deadlocking bubbletea
 		if strings.HasPrefix(content, "/react ") {
 			emoji := strings.TrimSpace(content[7:])
 			emoji = expandEmoji(emoji)
+			chatKey := m.activeChatKey
+			chatMgr := m.chatMgr
+			// Find the target message ID before returning
+			var targetID string
 			for i := len(m.messages) - 1; i >= 0; i-- {
 				if !m.messages[i].IsOwn && m.messages[i].Sender != "system" {
-					m.chatMgr.SendReaction(m.activeChatKey, m.messages[i].ID, emoji)
+					targetID = m.messages[i].ID
 					break
 				}
 			}
-			return m, nil
+			if targetID == "" {
+				return m, nil
+			}
+			return m, func() tea.Msg {
+				chatMgr.SendReaction(chatKey, targetID, emoji)
+				return ReactionUpdatedMsg{ChatKey: chatKey}
+			}
 		}
 
 		// Handle /status command
