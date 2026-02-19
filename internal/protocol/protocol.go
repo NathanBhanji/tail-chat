@@ -20,6 +20,13 @@ const (
 	TypeGroupChat    MessageType = 7
 	TypeGroupAccept  MessageType = 8
 	TypeGroupMembers MessageType = 9
+	TypeTyping       MessageType = 10
+	TypeReaction     MessageType = 11
+	TypeStatus       MessageType = 12
+	TypeReadReceipt  MessageType = 13
+	TypeFileOffer    MessageType = 14
+	TypeFileChunk    MessageType = 15
+	TypeFileAck      MessageType = 16
 )
 
 // Envelope wraps all messages with a type tag.
@@ -81,6 +88,54 @@ type GroupChat struct {
 type GroupMembers struct {
 	GroupID string   `json:"group_id"`
 	Members []string `json:"members"`
+}
+
+// Typing indicates a peer is typing (or stopped).
+type Typing struct {
+	ChatKey  string `json:"chat_key"`
+	IsTyping bool   `json:"is_typing"`
+}
+
+// Reaction adds an emoji reaction to a message.
+type Reaction struct {
+	MessageID string `json:"message_id"`
+	ChatKey   string `json:"chat_key"`
+	Emoji     string `json:"emoji"`
+	Sender    string `json:"sender"`
+	Remove    bool   `json:"remove,omitempty"`
+}
+
+// Status broadcasts the user's availability.
+type Status struct {
+	State string `json:"state"` // "available", "away", "busy", "dnd"
+}
+
+// ReadReceipt confirms a message has been read (not just received).
+type ReadReceipt struct {
+	MessageID string `json:"message_id"`
+	ChatKey   string `json:"chat_key"`
+}
+
+// FileOffer proposes a file transfer.
+type FileOffer struct {
+	TransferID string `json:"transfer_id"`
+	Filename   string `json:"filename"`
+	Size       int64  `json:"size"`
+	Checksum   string `json:"checksum"`
+}
+
+// FileChunk is a chunk of an in-progress file transfer.
+type FileChunk struct {
+	TransferID string `json:"transfer_id"`
+	Index      int    `json:"index"`
+	Data       []byte `json:"data"`
+	Final      bool   `json:"final"`
+}
+
+// FileAck acknowledges a file offer or signals completion.
+type FileAck struct {
+	TransferID string `json:"transfer_id"`
+	Accepted   bool   `json:"accepted"`
 }
 
 // MaxMessageSize is the maximum size of a single framed message (10MB).

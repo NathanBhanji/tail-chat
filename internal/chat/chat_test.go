@@ -37,8 +37,8 @@ func setupPair(t *testing.T) (alice *chat.Manager, bob *chat.Manager, cleanup fu
 	}
 	srvB.Start()
 
-	alice = chat.NewManager(srvA, kpA, "alice")
-	bob = chat.NewManager(srvB, kpB, "bob")
+	alice = chat.NewManager(srvA, kpA, "alice", nil)
+	bob = chat.NewManager(srvB, kpB, "bob", nil)
 
 	// Connect alice -> bob
 	conn, err := tcnet.Connect(srvB.Addr(), kpA, "alice")
@@ -64,6 +64,8 @@ func setupPair(t *testing.T) (alice *chat.Manager, bob *chat.Manager, cleanup fu
 	}
 
 	cleanup = func() {
+		alice.Stop()
+		bob.Stop()
 		srvA.Stop()
 		srvB.Stop()
 	}
@@ -282,6 +284,253 @@ func TestUnreadTracking(t *testing.T) {
 	bob.ClearUnread("alice")
 	if n := bob.Unread("alice"); n != 0 {
 		t.Fatalf("expected 0 unread after clear, got %d", n)
+	}
+}
+
+func TestDeliveryState(t *testing.T) {
+	alice, bob, cleanup := setupPair(t)
+	defer cleanup()
+
+	done := make(chan struct{})
+	bob.OnMessage(func(chatKey string, msg chat.Message) {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	})
+
+	// Alice sends a message
+	if err := alice.SendMessage("bob", "delivery test"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	// Wait for bob to receive (which triggers ACK)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout")
+	}
+
+	// Give the ACK time to propagate back
+	time.Sleep(100 * time.Millisecond)
+
+	// Alice's message should now be Delivered
+	msgs := alice.GetMessages("bob")
+	if len(msgs) == 0 {
+		t.Fatal("no messages in alice's history")
+	}
+	if msgs[0].State != chat.StateDelivered {
+		t.Fatalf("expected StateDelivered, got %d", msgs[0].State)
+	}
+}
+
+func TestTypingIndicator(t *testing.T) {
+	alice, bob, cleanup := setupPair(t)
+	defer cleanup()
+
+	typingReceived := make(chan bool, 1)
+	bob.OnTyping(func(chatKey string, isTyping bool) {
+		select {
+		case typingReceived <- isTyping:
+		default:
+		}
+	})
+
+	// Alice sends typing indicator
+	alice.SendTyping("bob", true)
+
+	select {
+	case isTyping := <-typingReceived:
+		if !isTyping {
+			t.Fatal("expected isTyping=true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for typing indicator")
+	}
+
+	// Bob should see alice as typing
+	if !bob.IsTyping("alice") {
+		t.Fatal("bob should see alice typing")
+	}
+
+	// After 3+ seconds, typing should expire
+	time.Sleep(3100 * time.Millisecond)
+	if bob.IsTyping("alice") {
+		t.Fatal("typing should have expired")
+	}
+}
+
+func TestReaction(t *testing.T) {
+	alice, bob, cleanup := setupPair(t)
+	defer cleanup()
+
+	msgReceived := make(chan struct{})
+	bob.OnMessage(func(chatKey string, msg chat.Message) {
+		select {
+		case msgReceived <- struct{}{}:
+		default:
+		}
+	})
+
+	reactionReceived := make(chan struct{})
+	alice.OnReaction(func(chatKey string, msgID string) {
+		select {
+		case reactionReceived <- struct{}{}:
+		default:
+		}
+	})
+
+	// Alice sends a message
+	if err := alice.SendMessage("bob", "react to this"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	select {
+	case <-msgReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for message")
+	}
+
+	// Get the message ID from bob's perspective
+	bobMsgs := bob.GetMessages("alice")
+	if len(bobMsgs) == 0 {
+		t.Fatal("bob has no messages")
+	}
+	msgID := bobMsgs[0].ID
+
+	// Bob reacts
+	bob.SendReaction("alice", msgID, "\U0001f44d")
+
+	select {
+	case <-reactionReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for reaction")
+	}
+
+	// Alice should see the reaction on her message
+	aliceMsgs := alice.GetMessages("bob")
+	found := false
+	for _, msg := range aliceMsgs {
+		if msg.ID == msgID && len(msg.Reactions) > 0 {
+			if msg.Reactions[0].Emoji == "\U0001f44d" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("alice did not see bob's reaction")
+	}
+}
+
+func TestStatus(t *testing.T) {
+	alice, bob, cleanup := setupPair(t)
+	defer cleanup()
+
+	statusReceived := make(chan string, 1)
+	bob.OnStatus(func(hostname string, state string) {
+		select {
+		case statusReceived <- state:
+		default:
+		}
+	})
+
+	// Default status
+	if s := alice.GetStatus("alice"); s != "available" {
+		t.Fatalf("expected 'available', got %q", s)
+	}
+
+	// Alice sets status to busy
+	alice.SetStatus("busy")
+
+	select {
+	case state := <-statusReceived:
+		if state != "busy" {
+			t.Fatalf("expected 'busy', got %q", state)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for status update")
+	}
+}
+
+func TestSearchMessages(t *testing.T) {
+	alice, bob, cleanup := setupPair(t)
+	defer cleanup()
+
+	done := make(chan struct{})
+	bob.OnMessage(func(chatKey string, msg chat.Message) {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	})
+
+	// Send a few messages
+	alice.SendMessage("bob", "hello world")
+	<-done
+	alice.SendMessage("bob", "goodbye world")
+	<-done
+	alice.SendMessage("bob", "testing 123")
+	<-done
+
+	// Search from alice's side (in-memory)
+	results := alice.SearchMessages("world")
+	total := 0
+	for _, msgs := range results {
+		total += len(msgs)
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 results for 'world', got %d", total)
+	}
+
+	results = alice.SearchMessages("testing")
+	total = 0
+	for _, msgs := range results {
+		total += len(msgs)
+	}
+	if total != 1 {
+		t.Fatalf("expected 1 result for 'testing', got %d", total)
+	}
+}
+
+func TestReadReceipts(t *testing.T) {
+	alice, bob, cleanup := setupPair(t)
+	defer cleanup()
+
+	msgReceived := make(chan struct{})
+	bob.OnMessage(func(chatKey string, msg chat.Message) {
+		select {
+		case msgReceived <- struct{}{}:
+		default:
+		}
+	})
+
+	// Alice sends a message
+	if err := alice.SendMessage("bob", "read receipt test"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	select {
+	case <-msgReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout")
+	}
+
+	// Wait for ACK
+	time.Sleep(100 * time.Millisecond)
+
+	// Bob sends read receipts
+	bob.SendReadReceipts("alice")
+
+	// Wait for the receipt to propagate
+	time.Sleep(200 * time.Millisecond)
+
+	// Alice's message should now be Read
+	msgs := alice.GetMessages("bob")
+	if len(msgs) == 0 {
+		t.Fatal("no messages")
+	}
+	if msgs[0].State != chat.StateRead {
+		t.Fatalf("expected StateRead, got %d", msgs[0].State)
 	}
 }
 

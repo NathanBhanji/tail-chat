@@ -145,4 +145,44 @@ var (
 	tailchatBadge = lipgloss.NewStyle().
 			Foreground(secondary).
 			Italic(true)
+
+	// Typing indicator
+	typingStyle = lipgloss.NewStyle().
+			Foreground(dimText).
+			Italic(true)
+
+	// Reactions
+	reactionStyle = lipgloss.NewStyle().
+			Foreground(warning)
+
+	// Delivery ticks
+	deliveryStyle = lipgloss.NewStyle().
+			Foreground(success)
+
+	deliveryPending = lipgloss.NewStyle().
+			Foreground(dimText)
+
+	// Status indicators
+	statusAway = lipgloss.NewStyle().
+			Foreground(warning)
+
+	statusBusy = lipgloss.NewStyle().
+			Foreground(danger)
+
+	statusDnd = lipgloss.NewStyle().
+			Foreground(danger).
+			Bold(true)
+
+	// Emoji completion
+	completionStyle = lipgloss.NewStyle().
+			Foreground(dimText)
+
+	completionSelected = lipgloss.NewStyle().
+				Foreground(text).
+				Background(primary)
+
+	// Scroll indicator
+	scrollIndicator = lipgloss.NewStyle().
+			Foreground(dimText).
+			Italic(true)
 )

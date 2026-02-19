@@ -12,6 +12,7 @@ import (
 	"github.com/NathanBhanji/tail-chat/internal/discovery"
 	tcnet "github.com/NathanBhanji/tail-chat/internal/net"
 	"github.com/NathanBhanji/tail-chat/internal/protocol"
+	"github.com/NathanBhanji/tail-chat/internal/storage"
 	"github.com/NathanBhanji/tail-chat/internal/tui"
 )
 
@@ -68,8 +69,15 @@ func run() error {
 	}
 	defer watcher.Stop()
 
+	// Create persistence store
+	store, err := storage.New("")
+	if err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+
 	// Create chat manager
-	chatMgr := chat.NewManager(server, kp, selfHost)
+	chatMgr := chat.NewManager(server, kp, selfHost, store)
+	defer chatMgr.Stop()
 
 	// Wire message callbacks to TUI
 	chatMgr.OnMessage(func(chatKey string, msg chat.Message) {
@@ -87,6 +95,24 @@ func run() error {
 	chatMgr.OnPeerConnect(func(hostname string) {
 		if program != nil {
 			program.Send(tui.PeerConnectMsg{Hostname: hostname})
+		}
+	})
+
+	chatMgr.OnTyping(func(chatKey string, isTyping bool) {
+		if program != nil {
+			program.Send(tui.TypingMsg{ChatKey: chatKey, IsTyping: isTyping})
+		}
+	})
+
+	chatMgr.OnReaction(func(chatKey string, msgID string) {
+		if program != nil {
+			program.Send(tui.ReactionUpdatedMsg{ChatKey: chatKey})
+		}
+	})
+
+	chatMgr.OnStatus(func(hostname string, state string) {
+		if program != nil {
+			program.Send(tui.StatusUpdatedMsg{Hostname: hostname, State: state})
 		}
 	})
 

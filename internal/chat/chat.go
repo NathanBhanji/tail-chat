@@ -1,7 +1,13 @@
 package chat
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,7 +16,23 @@ import (
 	"github.com/NathanBhanji/tail-chat/internal/crypto"
 	tcnet "github.com/NathanBhanji/tail-chat/internal/net"
 	"github.com/NathanBhanji/tail-chat/internal/protocol"
+	"github.com/NathanBhanji/tail-chat/internal/storage"
 )
+
+// DeliveryState tracks message delivery status.
+type DeliveryState int
+
+const (
+	StateSending   DeliveryState = iota
+	StateDelivered               // ACK received
+	StateRead                    // Read receipt received
+)
+
+// Reaction is a single emoji reaction on a message.
+type Reaction struct {
+	Emoji  string
+	Sender string
+}
 
 // Message is a decrypted chat message ready for display.
 type Message struct {
@@ -19,14 +41,28 @@ type Message struct {
 	Content   string
 	Timestamp time.Time
 	IsOwn     bool
-	GroupID   string // empty for 1:1
+	GroupID   string
+	State     DeliveryState
+	Reactions []Reaction
 }
 
 // Group represents a group chat.
 type Group struct {
 	ID      string
 	Name    string
-	Members []string // hostnames
+	Members []string
+}
+
+// FileTransfer tracks an in-progress transfer.
+type FileTransfer struct {
+	ID       string
+	Filename string
+	Size     int64
+	Checksum string
+	From     string
+	Accepted bool
+	Chunks   map[int][]byte
+	Done     bool
 }
 
 // Manager coordinates chat sessions, message encryption, and delivery.
@@ -35,50 +71,172 @@ type Manager struct {
 	server        *tcnet.Server
 	keyPair       *crypto.KeyPair
 	hostname      string
-	messages      map[string][]Message // chatKey -> messages (hostname or group:id)
-	groups        map[string]*Group    // groupID -> group
-	unread        map[string]int       // chatKey -> unread count
+	messages      map[string][]Message
+	groups        map[string]*Group
+	unread        map[string]int
+	typing        map[string]time.Time
+	peerStatus    map[string]string
+	transfers     map[string]*FileTransfer
+	store         *storage.Store
 	onMessage     func(chatKey string, msg Message)
 	onGroupInvite func(invite *protocol.GroupInvite, from string)
 	onPeerConnect func(hostname string)
+	onTyping      func(chatKey string, isTyping bool)
+	onReaction    func(chatKey string, msgID string)
+	onStatus      func(hostname string, state string)
+	onFileOffer   func(transfer *FileTransfer)
+	onFileDone    func(transfer *FileTransfer)
+
+	// Auto-reconnect
+	reconnectTargets map[string]string
+	reconnectStop    chan struct{}
 }
 
 // NewManager creates a chat manager.
-func NewManager(server *tcnet.Server, kp *crypto.KeyPair, hostname string) *Manager {
+func NewManager(server *tcnet.Server, kp *crypto.KeyPair, hostname string, store *storage.Store) *Manager {
 	m := &Manager{
-		server:   server,
-		keyPair:  kp,
-		hostname: hostname,
-		messages: make(map[string][]Message),
-		groups:   make(map[string]*Group),
-		unread:   make(map[string]int),
+		server:           server,
+		keyPair:          kp,
+		hostname:         hostname,
+		messages:         make(map[string][]Message),
+		groups:           make(map[string]*Group),
+		unread:           make(map[string]int),
+		typing:           make(map[string]time.Time),
+		peerStatus:       make(map[string]string),
+		transfers:        make(map[string]*FileTransfer),
+		store:            store,
+		reconnectTargets: make(map[string]string),
+		reconnectStop:    make(chan struct{}),
 	}
 
 	server.OnMessage(m.handleMessage)
 	server.OnConnect(m.handleConnect)
+	server.OnDisconnect(m.handleDisconnect)
+
+	if store != nil {
+		m.loadPersistedData()
+	}
+
+	go m.reconnectLoop()
 
 	return m
 }
 
-// OnMessage sets a callback for new messages (1:1 or group).
-func (m *Manager) OnMessage(fn func(chatKey string, msg Message)) {
-	m.onMessage = fn
+func (m *Manager) loadPersistedData() {
+	groups, err := m.store.LoadGroups()
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	for _, sg := range groups {
+		m.groups[sg.ID] = &Group{ID: sg.ID, Name: sg.Name, Members: sg.Members}
+	}
+	m.mu.Unlock()
 }
 
-// OnGroupInvite sets a callback for group invitations.
-func (m *Manager) OnGroupInvite(fn func(invite *protocol.GroupInvite, from string)) {
-	m.onGroupInvite = fn
+// LoadMessages loads persisted messages for a chat key.
+func (m *Manager) LoadMessages(chatKey string) {
+	if m.store == nil {
+		return
+	}
+	stored, err := m.store.LoadMessages(chatKey)
+	if err != nil || len(stored) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.messages[chatKey]) > 0 {
+		return
+	}
+	for _, sm := range stored {
+		var reactions []Reaction
+		for _, sr := range sm.Reactions {
+			reactions = append(reactions, Reaction{Emoji: sr.Emoji, Sender: sr.Sender})
+		}
+		state := StateSending
+		if sm.Read {
+			state = StateRead
+		} else if sm.Delivered {
+			state = StateDelivered
+		}
+		m.messages[chatKey] = append(m.messages[chatKey], Message{
+			ID:        sm.ID,
+			Sender:    sm.Sender,
+			Content:   sm.Content,
+			Timestamp: sm.Timestamp,
+			IsOwn:     sm.IsOwn,
+			GroupID:   sm.GroupID,
+			State:     state,
+			Reactions: reactions,
+		})
+	}
 }
 
-// OnPeerConnect sets a callback for when a peer connects to us.
-func (m *Manager) OnPeerConnect(fn func(hostname string)) {
-	m.onPeerConnect = fn
+func (m *Manager) persistMessages(chatKey string) {
+	if m.store == nil {
+		return
+	}
+	msgs := m.messages[chatKey]
+	var stored []storage.StoredMessage
+	for _, msg := range msgs {
+		var reactions []storage.StoredReaction
+		for _, r := range msg.Reactions {
+			reactions = append(reactions, storage.StoredReaction{Emoji: r.Emoji, Sender: r.Sender})
+		}
+		stored = append(stored, storage.StoredMessage{
+			ID:        msg.ID,
+			Sender:    msg.Sender,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp,
+			IsOwn:     msg.IsOwn,
+			GroupID:   msg.GroupID,
+			Delivered: msg.State >= StateDelivered,
+			Read:      msg.State >= StateRead,
+			Reactions: reactions,
+		})
+	}
+	go m.store.SaveMessages(chatKey, stored)
 }
+
+func (m *Manager) persistGroups() {
+	if m.store == nil {
+		return
+	}
+	var groups []storage.StoredGroup
+	for _, g := range m.groups {
+		groups = append(groups, storage.StoredGroup{ID: g.ID, Name: g.Name, Members: g.Members})
+	}
+	go m.store.SaveGroups(groups)
+}
+
+// Callbacks
+func (m *Manager) OnMessage(fn func(chatKey string, msg Message))                  { m.onMessage = fn }
+func (m *Manager) OnGroupInvite(fn func(invite *protocol.GroupInvite, from string)) { m.onGroupInvite = fn }
+func (m *Manager) OnPeerConnect(fn func(hostname string))                           { m.onPeerConnect = fn }
+func (m *Manager) OnTyping(fn func(chatKey string, isTyping bool))                  { m.onTyping = fn }
+func (m *Manager) OnReaction(fn func(chatKey string, msgID string))                 { m.onReaction = fn }
+func (m *Manager) OnStatus(fn func(hostname string, state string))                  { m.onStatus = fn }
+func (m *Manager) OnFileOffer(fn func(transfer *FileTransfer))                      { m.onFileOffer = fn }
+func (m *Manager) OnFileDone(fn func(transfer *FileTransfer))                       { m.onFileDone = fn }
 
 func (m *Manager) handleConnect(c *tcnet.Connection) {
 	if m.onPeerConnect != nil {
 		m.onPeerConnect(c.PeerHostname)
 	}
+	m.mu.RLock()
+	state := m.peerStatus[m.hostname]
+	m.mu.RUnlock()
+	if state == "" {
+		state = "available"
+	}
+	env, _ := protocol.Wrap(protocol.TypeStatus, &protocol.Status{State: state})
+	c.WriteMessage(env)
+}
+
+func (m *Manager) handleDisconnect(hostname string) {
+	m.mu.Lock()
+	delete(m.peerStatus, hostname)
+	m.mu.Unlock()
 }
 
 func (m *Manager) handleMessage(c *tcnet.Connection, env *protocol.Envelope) {
@@ -86,7 +244,7 @@ func (m *Manager) handleMessage(c *tcnet.Connection, env *protocol.Envelope) {
 	case protocol.TypeChat:
 		m.handleChatMessage(c, env)
 	case protocol.TypeAck:
-		// Message acknowledged
+		m.handleAck(c, env)
 	case protocol.TypePing:
 		m.handlePing(c)
 	case protocol.TypeGroupInvite:
@@ -95,6 +253,20 @@ func (m *Manager) handleMessage(c *tcnet.Connection, env *protocol.Envelope) {
 		m.handleGroupChat(c, env)
 	case protocol.TypeGroupAccept:
 		m.handleGroupAccept(c, env)
+	case protocol.TypeTyping:
+		m.handleTyping(c, env)
+	case protocol.TypeReaction:
+		m.handleReaction(c, env)
+	case protocol.TypeStatus:
+		m.handleStatusMsg(c, env)
+	case protocol.TypeReadReceipt:
+		m.handleReadReceipt(c, env)
+	case protocol.TypeFileOffer:
+		m.handleFileOffer(c, env)
+	case protocol.TypeFileChunk:
+		m.handleFileChunk(c, env)
+	case protocol.TypeFileAck:
+		m.handleFileAckMsg(c, env)
 	}
 }
 
@@ -104,8 +276,6 @@ func (m *Manager) handleChatMessage(c *tcnet.Connection, env *protocol.Envelope)
 		m.systemMessage(c.PeerHostname, fmt.Sprintf("[failed to parse message: %v]", err))
 		return
 	}
-
-	// Decrypt
 	plaintext, err := crypto.Decrypt(c.SharedSecret, chatMsg.Ciphertext)
 	if err != nil {
 		m.systemMessage(c.PeerHostname, fmt.Sprintf("[failed to decrypt message: %v]", err))
@@ -118,15 +288,16 @@ func (m *Manager) handleChatMessage(c *tcnet.Connection, env *protocol.Envelope)
 		Content:   string(plaintext),
 		Timestamp: time.Unix(0, chatMsg.Timestamp),
 		IsOwn:     false,
+		State:     StateDelivered,
 	}
 
 	chatKey := c.PeerHostname
 	m.mu.Lock()
 	m.messages[chatKey] = append(m.messages[chatKey], msg)
 	m.unread[chatKey]++
+	m.persistMessages(chatKey)
 	m.mu.Unlock()
 
-	// Send ack
 	ack := &protocol.Ack{MessageID: chatMsg.ID}
 	ackEnv, _ := protocol.Wrap(protocol.TypeAck, ack)
 	c.WriteMessage(ackEnv)
@@ -136,7 +307,24 @@ func (m *Manager) handleChatMessage(c *tcnet.Connection, env *protocol.Envelope)
 	}
 }
 
-// systemMessage injects a local system message into a chat for error visibility.
+func (m *Manager) handleAck(_ *tcnet.Connection, env *protocol.Envelope) {
+	ack, err := protocol.Unwrap[protocol.Ack](env)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	for chatKey, msgs := range m.messages {
+		for i, msg := range msgs {
+			if msg.ID == ack.MessageID && msg.State < StateDelivered {
+				m.messages[chatKey][i].State = StateDelivered
+				m.persistMessages(chatKey)
+				break
+			}
+		}
+	}
+	m.mu.Unlock()
+}
+
 func (m *Manager) systemMessage(chatKey, text string) {
 	msg := Message{
 		ID:        uuid.New().String(),
@@ -164,27 +352,22 @@ func (m *Manager) handleGroupInvite(c *tcnet.Connection, env *protocol.Envelope)
 	if err != nil {
 		return
 	}
-
 	if m.onGroupInvite != nil {
 		m.onGroupInvite(invite, c.PeerHostname)
 	}
 }
 
-func (m *Manager) handleGroupAccept(c *tcnet.Connection, env *protocol.Envelope) {
+func (m *Manager) handleGroupAccept(_ *tcnet.Connection, env *protocol.Envelope) {
 	accept, err := protocol.Unwrap[protocol.GroupAccept](env)
 	if err != nil {
 		return
 	}
-
 	m.mu.RLock()
 	_, exists := m.groups[accept.GroupID]
 	m.mu.RUnlock()
-
 	if !exists {
 		return
 	}
-
-	// Peer accepted — nothing else to do for now, they're already connected
 }
 
 func (m *Manager) handleGroupChat(c *tcnet.Connection, env *protocol.Envelope) {
@@ -192,7 +375,6 @@ func (m *Manager) handleGroupChat(c *tcnet.Connection, env *protocol.Envelope) {
 	if err != nil {
 		return
 	}
-
 	plaintext, err := crypto.Decrypt(c.SharedSecret, groupMsg.Ciphertext)
 	if err != nil {
 		return
@@ -205,11 +387,14 @@ func (m *Manager) handleGroupChat(c *tcnet.Connection, env *protocol.Envelope) {
 		Timestamp: time.Unix(0, groupMsg.Timestamp),
 		IsOwn:     false,
 		GroupID:   groupMsg.GroupID,
+		State:     StateDelivered,
 	}
 
 	chatKey := "group:" + groupMsg.GroupID
 	m.mu.Lock()
 	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.unread[chatKey]++
+	m.persistMessages(chatKey)
 	m.mu.Unlock()
 
 	if m.onMessage != nil {
@@ -217,13 +402,203 @@ func (m *Manager) handleGroupChat(c *tcnet.Connection, env *protocol.Envelope) {
 	}
 }
 
-// SendMessage sends an encrypted 1:1 message to a connected peer.
+func (m *Manager) handleTyping(c *tcnet.Connection, env *protocol.Envelope) {
+	typing, err := protocol.Unwrap[protocol.Typing](env)
+	if err != nil {
+		return
+	}
+	chatKey := c.PeerHostname
+	if strings.HasPrefix(typing.ChatKey, "group:") {
+		chatKey = typing.ChatKey
+	}
+	m.mu.Lock()
+	if typing.IsTyping {
+		m.typing[chatKey] = time.Now()
+	} else {
+		delete(m.typing, chatKey)
+	}
+	m.mu.Unlock()
+	if m.onTyping != nil {
+		m.onTyping(chatKey, typing.IsTyping)
+	}
+}
+
+func (m *Manager) handleReaction(c *tcnet.Connection, env *protocol.Envelope) {
+	reaction, err := protocol.Unwrap[protocol.Reaction](env)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	chatKey := c.PeerHostname
+	if strings.HasPrefix(reaction.ChatKey, "group:") {
+		chatKey = reaction.ChatKey
+	}
+	for i, msg := range m.messages[chatKey] {
+		if msg.ID == reaction.MessageID {
+			if reaction.Remove {
+				var kept []Reaction
+				for _, r := range m.messages[chatKey][i].Reactions {
+					if !(r.Emoji == reaction.Emoji && r.Sender == reaction.Sender) {
+						kept = append(kept, r)
+					}
+				}
+				m.messages[chatKey][i].Reactions = kept
+			} else {
+				m.messages[chatKey][i].Reactions = append(m.messages[chatKey][i].Reactions, Reaction{
+					Emoji:  reaction.Emoji,
+					Sender: reaction.Sender,
+				})
+			}
+			m.persistMessages(chatKey)
+			break
+		}
+	}
+	m.mu.Unlock()
+	if m.onReaction != nil {
+		m.onReaction(chatKey, reaction.MessageID)
+	}
+}
+
+func (m *Manager) handleStatusMsg(c *tcnet.Connection, env *protocol.Envelope) {
+	status, err := protocol.Unwrap[protocol.Status](env)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	m.peerStatus[c.PeerHostname] = status.State
+	m.mu.Unlock()
+	if m.onStatus != nil {
+		m.onStatus(c.PeerHostname, status.State)
+	}
+}
+
+func (m *Manager) handleReadReceipt(c *tcnet.Connection, env *protocol.Envelope) {
+	receipt, err := protocol.Unwrap[protocol.ReadReceipt](env)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	chatKey := c.PeerHostname
+	if strings.HasPrefix(receipt.ChatKey, "group:") {
+		chatKey = receipt.ChatKey
+	}
+	for i, msg := range m.messages[chatKey] {
+		if msg.ID == receipt.MessageID {
+			m.messages[chatKey][i].State = StateRead
+			m.persistMessages(chatKey)
+			break
+		}
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) handleFileOffer(c *tcnet.Connection, env *protocol.Envelope) {
+	offer, err := protocol.Unwrap[protocol.FileOffer](env)
+	if err != nil {
+		return
+	}
+	ft := &FileTransfer{
+		ID:       offer.TransferID,
+		Filename: offer.Filename,
+		Size:     offer.Size,
+		Checksum: offer.Checksum,
+		From:     c.PeerHostname,
+		Chunks:   make(map[int][]byte),
+	}
+	m.mu.Lock()
+	m.transfers[offer.TransferID] = ft
+	m.mu.Unlock()
+
+	// Auto-accept file transfers
+	ackEnv, _ := protocol.Wrap(protocol.TypeFileAck, &protocol.FileAck{
+		TransferID: offer.TransferID,
+		Accepted:   true,
+	})
+	c.WriteMessage(ackEnv)
+
+	if m.onFileOffer != nil {
+		m.onFileOffer(ft)
+	}
+}
+
+func (m *Manager) handleFileChunk(c *tcnet.Connection, env *protocol.Envelope) {
+	chunk, err := protocol.Unwrap[protocol.FileChunk](env)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	ft, ok := m.transfers[chunk.TransferID]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	ft.Chunks[chunk.Index] = chunk.Data
+	if chunk.Final {
+		ft.Done = true
+	}
+	m.mu.Unlock()
+
+	if chunk.Final {
+		go m.assembleFile(ft)
+	}
+}
+
+func (m *Manager) handleFileAckMsg(_ *tcnet.Connection, env *protocol.Envelope) {
+	ack, err := protocol.Unwrap[protocol.FileAck](env)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	ft, ok := m.transfers[ack.TransferID]
+	if ok {
+		ft.Accepted = ack.Accepted
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) assembleFile(ft *FileTransfer) {
+	home, _ := os.UserHomeDir()
+	dlDir := filepath.Join(home, "Downloads", "tailchat")
+	os.MkdirAll(dlDir, 0700)
+	path := filepath.Join(dlDir, ft.Filename)
+
+	f, err := os.Create(path)
+	if err != nil {
+		m.systemMessage(ft.From, fmt.Sprintf("[file save failed: %v]", err))
+		return
+	}
+	defer f.Close()
+
+	for i := 0; ; i++ {
+		data, ok := ft.Chunks[i]
+		if !ok {
+			break
+		}
+		f.Write(data)
+	}
+
+	f.Seek(0, 0)
+	h := sha256.New()
+	io.Copy(h, f)
+	got := hex.EncodeToString(h.Sum(nil))
+	if ft.Checksum != "" && got != ft.Checksum {
+		m.systemMessage(ft.From, fmt.Sprintf("[file checksum mismatch: %s]", ft.Filename))
+		return
+	}
+
+	m.systemMessage(ft.From, fmt.Sprintf("[file received: %s → %s]", ft.Filename, path))
+	if m.onFileDone != nil {
+		m.onFileDone(ft)
+	}
+}
+
+// Public API
+
 func (m *Manager) SendMessage(peerHostname, content string) error {
 	conn := m.server.GetConnection(peerHostname)
 	if conn == nil {
 		return fmt.Errorf("not connected to %s", peerHostname)
 	}
-
 	ciphertext, err := crypto.Encrypt(conn.SharedSecret, []byte(content))
 	if err != nil {
 		return fmt.Errorf("encrypt: %w", err)
@@ -235,32 +610,217 @@ func (m *Manager) SendMessage(peerHostname, content string) error {
 		Ciphertext: ciphertext,
 		Timestamp:  now.UnixNano(),
 	}
-
 	if err := tcnet.SendEncrypted(conn, protocol.TypeChat, chatMsg); err != nil {
 		return fmt.Errorf("send: %w", err)
 	}
 
-	// Store own message
 	msg := Message{
 		ID:        chatMsg.ID,
 		Sender:    m.hostname,
 		Content:   content,
 		Timestamp: now,
 		IsOwn:     true,
+		State:     StateSending,
 	}
-
 	m.mu.Lock()
 	m.messages[peerHostname] = append(m.messages[peerHostname], msg)
+	m.persistMessages(peerHostname)
 	m.mu.Unlock()
 
 	if m.onMessage != nil {
 		m.onMessage(peerHostname, msg)
 	}
-
 	return nil
 }
 
-// ConnectToPeer establishes a connection and registers it.
+func (m *Manager) SendTyping(chatKey string, isTyping bool) {
+	hostname := chatKey
+	if strings.HasPrefix(chatKey, "group:") {
+		return // no typing indicators for groups
+	}
+	conn := m.server.GetConnection(hostname)
+	if conn == nil {
+		return
+	}
+	env, _ := protocol.Wrap(protocol.TypeTyping, &protocol.Typing{ChatKey: chatKey, IsTyping: isTyping})
+	conn.WriteMessage(env)
+}
+
+func (m *Manager) SendReaction(chatKey, messageID, emoji string) {
+	reaction := &protocol.Reaction{
+		MessageID: messageID,
+		ChatKey:   chatKey,
+		Emoji:     emoji,
+		Sender:    m.hostname,
+	}
+
+	m.mu.Lock()
+	for i, msg := range m.messages[chatKey] {
+		if msg.ID == messageID {
+			m.messages[chatKey][i].Reactions = append(m.messages[chatKey][i].Reactions, Reaction{
+				Emoji: emoji, Sender: m.hostname,
+			})
+			m.persistMessages(chatKey)
+			break
+		}
+	}
+	m.mu.Unlock()
+
+	if strings.HasPrefix(chatKey, "group:") {
+		groupID := strings.TrimPrefix(chatKey, "group:")
+		m.mu.RLock()
+		group := m.groups[groupID]
+		m.mu.RUnlock()
+		if group != nil {
+			for _, member := range group.Members {
+				if member == m.hostname {
+					continue
+				}
+				conn := m.server.GetConnection(member)
+				if conn != nil {
+					env, _ := protocol.Wrap(protocol.TypeReaction, reaction)
+					conn.WriteMessage(env)
+				}
+			}
+		}
+	} else {
+		conn := m.server.GetConnection(chatKey)
+		if conn != nil {
+			env, _ := protocol.Wrap(protocol.TypeReaction, reaction)
+			conn.WriteMessage(env)
+		}
+	}
+
+	if m.onReaction != nil {
+		m.onReaction(chatKey, messageID)
+	}
+}
+
+func (m *Manager) SendReadReceipts(chatKey string) {
+	m.mu.Lock()
+	var toSend []string
+	for i, msg := range m.messages[chatKey] {
+		if !msg.IsOwn && msg.State < StateRead && msg.Sender != "system" {
+			m.messages[chatKey][i].State = StateRead
+			toSend = append(toSend, msg.ID)
+		}
+	}
+	if len(toSend) > 0 {
+		m.persistMessages(chatKey)
+	}
+	m.mu.Unlock()
+
+	if strings.HasPrefix(chatKey, "group:") {
+		return
+	}
+	conn := m.server.GetConnection(chatKey)
+	if conn == nil {
+		return
+	}
+	for _, id := range toSend {
+		env, _ := protocol.Wrap(protocol.TypeReadReceipt, &protocol.ReadReceipt{MessageID: id, ChatKey: chatKey})
+		conn.WriteMessage(env)
+	}
+}
+
+func (m *Manager) SetStatus(state string) {
+	m.mu.Lock()
+	m.peerStatus[m.hostname] = state
+	m.mu.Unlock()
+	env, _ := protocol.Wrap(protocol.TypeStatus, &protocol.Status{State: state})
+	for _, conn := range m.server.Connections() {
+		conn.WriteMessage(env)
+	}
+}
+
+func (m *Manager) GetStatus(hostname string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if s := m.peerStatus[hostname]; s != "" {
+		return s
+	}
+	return "available"
+}
+
+func (m *Manager) IsTyping(chatKey string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	t, ok := m.typing[chatKey]
+	if !ok {
+		return false
+	}
+	return time.Since(t) < 3*time.Second
+}
+
+func (m *Manager) SendFile(peerHostname, filePath string) error {
+	conn := m.server.GetConnection(peerHostname)
+	if conn == nil {
+		return fmt.Errorf("not connected to %s", peerHostname)
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	checksum := hex.EncodeToString(h.Sum(nil))
+	f.Seek(0, 0)
+
+	transferID := uuid.New().String()
+	offer := &protocol.FileOffer{
+		TransferID: transferID,
+		Filename:   filepath.Base(filePath),
+		Size:       info.Size(),
+		Checksum:   checksum,
+	}
+	env, _ := protocol.Wrap(protocol.TypeFileOffer, offer)
+	if err := conn.WriteMessage(env); err != nil {
+		return err
+	}
+
+	const chunkSize = 64 * 1024
+	buf := make([]byte, chunkSize)
+	idx := 0
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			final := readErr == io.EOF
+			chunk := &protocol.FileChunk{
+				TransferID: transferID,
+				Index:      idx,
+				Data:       make([]byte, n),
+				Final:      final,
+			}
+			copy(chunk.Data, buf[:n])
+			cEnv, _ := protocol.Wrap(protocol.TypeFileChunk, chunk)
+			if err := conn.WriteMessage(cEnv); err != nil {
+				return err
+			}
+			idx++
+			if final {
+				break
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return readErr
+		}
+	}
+
+	m.systemMessage(peerHostname, fmt.Sprintf("[file sent: %s (%d bytes)]", filepath.Base(filePath), info.Size()))
+	return nil
+}
+
 func (m *Manager) ConnectToPeer(ip string) (*tcnet.Connection, error) {
 	addr := fmt.Sprintf("%s:%d", ip, tcnet.DefaultPort)
 	conn, err := tcnet.Connect(addr, m.keyPair, m.hostname)
@@ -268,10 +828,76 @@ func (m *Manager) ConnectToPeer(ip string) (*tcnet.Connection, error) {
 		return nil, err
 	}
 	m.server.AddConnection(conn)
+	m.mu.Lock()
+	m.reconnectTargets[conn.PeerHostname] = ip
+	m.mu.Unlock()
 	return conn, nil
 }
 
-// GetMessages returns chat history for a chat key.
+func (m *Manager) reconnectLoop() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			m.mu.RLock()
+			targets := make(map[string]string, len(m.reconnectTargets))
+			for k, v := range m.reconnectTargets {
+				targets[k] = v
+			}
+			m.mu.RUnlock()
+			for hostname, ip := range targets {
+				if m.server.GetConnection(hostname) != nil {
+					continue
+				}
+				addr := fmt.Sprintf("%s:%d", ip, tcnet.DefaultPort)
+				conn, err := tcnet.Connect(addr, m.keyPair, m.hostname)
+				if err != nil {
+					continue
+				}
+				m.server.AddConnection(conn)
+			}
+		case <-m.reconnectStop:
+			return
+		}
+	}
+}
+
+func (m *Manager) Stop() {
+	close(m.reconnectStop)
+}
+
+func (m *Manager) SearchMessages(query string) map[string][]Message {
+	if m.store == nil {
+		results := make(map[string][]Message)
+		m.mu.RLock()
+		lq := strings.ToLower(query)
+		for chatKey, msgs := range m.messages {
+			for _, msg := range msgs {
+				if strings.Contains(strings.ToLower(msg.Content), lq) {
+					results[chatKey] = append(results[chatKey], msg)
+				}
+			}
+		}
+		m.mu.RUnlock()
+		return results
+	}
+	stored, err := m.store.Search(query)
+	if err != nil {
+		return nil
+	}
+	results := make(map[string][]Message)
+	for chatKey, smsgs := range stored {
+		for _, sm := range smsgs {
+			results[chatKey] = append(results[chatKey], Message{
+				ID: sm.ID, Sender: sm.Sender, Content: sm.Content,
+				Timestamp: sm.Timestamp, IsOwn: sm.IsOwn, GroupID: sm.GroupID,
+			})
+		}
+	}
+	return results
+}
+
 func (m *Manager) GetMessages(chatKey string) []Message {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -281,25 +907,18 @@ func (m *Manager) GetMessages(chatKey string) []Message {
 	return result
 }
 
-// CreateGroup creates a new group chat and invites members.
 func (m *Manager) CreateGroup(name string, memberHostnames []string) (*Group, error) {
 	group := &Group{
 		ID:      uuid.New().String(),
 		Name:    name,
 		Members: append(memberHostnames, m.hostname),
 	}
-
 	m.mu.Lock()
 	m.groups[group.ID] = group
+	m.persistGroups()
 	m.mu.Unlock()
 
-	// Send invites to all members
-	invite := &protocol.GroupInvite{
-		GroupID:   group.ID,
-		GroupName: name,
-		Members:   group.Members,
-	}
-
+	invite := &protocol.GroupInvite{GroupID: group.ID, GroupName: name, Members: group.Members}
 	for _, host := range memberHostnames {
 		conn := m.server.GetConnection(host)
 		if conn == nil {
@@ -307,23 +926,16 @@ func (m *Manager) CreateGroup(name string, memberHostnames []string) (*Group, er
 		}
 		tcnet.SendEncrypted(conn, protocol.TypeGroupInvite, invite)
 	}
-
 	return group, nil
 }
 
-// AcceptGroupInvite accepts a group invitation.
 func (m *Manager) AcceptGroupInvite(invite *protocol.GroupInvite, fromHost string) {
-	group := &Group{
-		ID:      invite.GroupID,
-		Name:    invite.GroupName,
-		Members: invite.Members,
-	}
-
+	group := &Group{ID: invite.GroupID, Name: invite.GroupName, Members: invite.Members}
 	m.mu.Lock()
 	m.groups[group.ID] = group
+	m.persistGroups()
 	m.mu.Unlock()
 
-	// Send accept back
 	conn := m.server.GetConnection(fromHost)
 	if conn != nil {
 		accept := &protocol.GroupAccept{GroupID: group.ID}
@@ -331,68 +943,51 @@ func (m *Manager) AcceptGroupInvite(invite *protocol.GroupInvite, fromHost strin
 	}
 }
 
-// SendGroupMessage sends an encrypted message to all group members.
 func (m *Manager) SendGroupMessage(groupID, content string) error {
 	m.mu.RLock()
 	group, exists := m.groups[groupID]
 	m.mu.RUnlock()
-
 	if !exists {
 		return fmt.Errorf("group %s not found", groupID)
 	}
 
 	now := time.Now()
 	msgID := uuid.New().String()
-
 	for _, member := range group.Members {
 		if member == m.hostname {
 			continue
 		}
-
 		conn := m.server.GetConnection(member)
 		if conn == nil {
 			continue
 		}
-
 		ciphertext, err := crypto.Encrypt(conn.SharedSecret, []byte(content))
 		if err != nil {
 			continue
 		}
-
 		groupMsg := &protocol.GroupChat{
-			ID:         msgID,
-			GroupID:    groupID,
-			Sender:     m.hostname,
-			Ciphertext: ciphertext,
-			Timestamp:  now.UnixNano(),
+			ID: msgID, GroupID: groupID, Sender: m.hostname,
+			Ciphertext: ciphertext, Timestamp: now.UnixNano(),
 		}
-
 		tcnet.SendEncrypted(conn, protocol.TypeGroupChat, groupMsg)
 	}
 
-	// Store own message
 	msg := Message{
-		ID:        msgID,
-		Sender:    m.hostname,
-		Content:   content,
-		Timestamp: now,
-		IsOwn:     true,
-		GroupID:   groupID,
+		ID: msgID, Sender: m.hostname, Content: content,
+		Timestamp: now, IsOwn: true, GroupID: groupID, State: StateSending,
 	}
-
 	chatKey := "group:" + groupID
 	m.mu.Lock()
 	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.persistMessages(chatKey)
 	m.mu.Unlock()
 
 	if m.onMessage != nil {
 		m.onMessage(chatKey, msg)
 	}
-
 	return nil
 }
 
-// Groups returns all groups.
 func (m *Manager) Groups() []*Group {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -403,21 +998,18 @@ func (m *Manager) Groups() []*Group {
 	return groups
 }
 
-// Unread returns the unread message count for a chat key.
 func (m *Manager) Unread(chatKey string) int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.unread[chatKey]
 }
 
-// ClearUnread resets the unread count for a chat key.
 func (m *Manager) ClearUnread(chatKey string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.unread, chatKey)
 }
 
-// IsConnected returns whether we have an active connection to a peer.
 func (m *Manager) IsConnected(hostname string) bool {
 	return m.server.GetConnection(hostname) != nil
 }

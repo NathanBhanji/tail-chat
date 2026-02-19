@@ -35,9 +35,10 @@ type Server struct {
 	hostname   string
 	mu         sync.RWMutex
 	conns      map[string]*Connection // hostname -> connection
-	onConnect  func(*Connection)
-	onMessage  func(*Connection, *protocol.Envelope)
-	stopCh     chan struct{}
+	onConnect    func(*Connection)
+	onMessage    func(*Connection, *protocol.Envelope)
+	onDisconnect func(hostname string)
+	stopCh       chan struct{}
 }
 
 // NewServer creates a TCP server bound to the given address.
@@ -64,6 +65,11 @@ func (s *Server) OnConnect(fn func(*Connection)) {
 // OnMessage sets a callback for incoming messages.
 func (s *Server) OnMessage(fn func(*Connection, *protocol.Envelope)) {
 	s.onMessage = fn
+}
+
+// OnDisconnect sets a callback for when a peer disconnects.
+func (s *Server) OnDisconnect(fn func(hostname string)) {
+	s.onDisconnect = fn
 }
 
 // Addr returns the server's listen address.
@@ -162,12 +168,15 @@ func (s *Server) readLoop(c *Connection) {
 	defer func() {
 		c.Conn.Close()
 		s.mu.Lock()
-		// Only remove if this connection is still the active one for this peer.
-		// A newer connection may have replaced us in the map.
+		removed := false
 		if current, ok := s.conns[c.PeerHostname]; ok && current == c {
 			delete(s.conns, c.PeerHostname)
+			removed = true
 		}
 		s.mu.Unlock()
+		if removed && s.onDisconnect != nil {
+			s.onDisconnect(c.PeerHostname)
+		}
 	}()
 
 	for {
