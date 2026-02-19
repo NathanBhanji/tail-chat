@@ -23,10 +23,7 @@ const (
 	TypeTyping       MessageType = 10
 	TypeReaction     MessageType = 11
 	TypeStatus       MessageType = 12
-	TypeReadReceipt  MessageType = 13
-	TypeFileOffer    MessageType = 14
-	TypeFileChunk    MessageType = 15
-	TypeFileAck      MessageType = 16
+	TypeReadReceipt MessageType = 13
 )
 
 // Envelope wraps all messages with a type tag.
@@ -114,28 +111,6 @@ type Status struct {
 type ReadReceipt struct {
 	MessageID string `json:"message_id"`
 	ChatKey   string `json:"chat_key"`
-}
-
-// FileOffer proposes a file transfer.
-type FileOffer struct {
-	TransferID string `json:"transfer_id"`
-	Filename   string `json:"filename"`
-	Size       int64  `json:"size"`
-	Checksum   string `json:"checksum"`
-}
-
-// FileChunk is a chunk of an in-progress file transfer.
-type FileChunk struct {
-	TransferID string `json:"transfer_id"`
-	Index      int    `json:"index"`
-	Data       []byte `json:"data"`
-	Final      bool   `json:"final"`
-}
-
-// FileAck acknowledges a file offer or signals completion.
-type FileAck struct {
-	TransferID string `json:"transfer_id"`
-	Accepted   bool   `json:"accepted"`
 }
 
 // MaxMessageSize is the maximum size of a single framed message (10MB).

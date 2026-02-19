@@ -187,6 +187,136 @@ func TestNewStore_DefaultDir(t *testing.T) {
 	_ = home
 }
 
+func TestFileInfoPersistence(t *testing.T) {
+	s := tempStore(t)
+
+	msgs := []storage.StoredMessage{
+		{
+			ID:      "file-msg-1",
+			Sender:  "alice",
+			Content: "report.pdf",
+			FileInfo: &storage.StoredFileInfo{
+				Filename: "report.pdf",
+				Size:     2_500_000,
+				State:    1, // FileSent
+			},
+		},
+		{
+			ID:      "file-msg-2",
+			Sender:  "bob",
+			Content: "photo.png",
+			FileInfo: &storage.StoredFileInfo{
+				Filename: "photo.png",
+				Size:     500_000,
+				State:    3, // FileReceived
+				Path:     "/home/user/Downloads/tailchat/photo.png",
+			},
+		},
+		{
+			ID:      "file-msg-3",
+			Sender:  "alice",
+			Content: "broken.zip",
+			FileInfo: &storage.StoredFileInfo{
+				Filename: "broken.zip",
+				Size:     100,
+				State:    2, // FileFailed
+				Error:    "peer offline",
+			},
+		},
+		{
+			ID:      "regular-msg",
+			Sender:  "alice",
+			Content: "no file here",
+			// FileInfo is nil
+		},
+	}
+
+	if err := s.SaveMessages("alice", msgs); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := s.LoadMessages("alice")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if len(loaded) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(loaded))
+	}
+
+	// File msg 1: sent
+	if loaded[0].FileInfo == nil {
+		t.Fatal("expected FileInfo on msg 1")
+	}
+	if loaded[0].FileInfo.Filename != "report.pdf" {
+		t.Errorf("expected 'report.pdf', got %q", loaded[0].FileInfo.Filename)
+	}
+	if loaded[0].FileInfo.Size != 2_500_000 {
+		t.Errorf("expected 2500000, got %d", loaded[0].FileInfo.Size)
+	}
+	if loaded[0].FileInfo.State != 1 {
+		t.Errorf("expected state 1, got %d", loaded[0].FileInfo.State)
+	}
+
+	// File msg 2: received with path
+	if loaded[1].FileInfo == nil {
+		t.Fatal("expected FileInfo on msg 2")
+	}
+	if loaded[1].FileInfo.Path != "/home/user/Downloads/tailchat/photo.png" {
+		t.Errorf("expected path, got %q", loaded[1].FileInfo.Path)
+	}
+
+	// File msg 3: failed with error
+	if loaded[2].FileInfo == nil {
+		t.Fatal("expected FileInfo on msg 3")
+	}
+	if loaded[2].FileInfo.Error != "peer offline" {
+		t.Errorf("expected 'peer offline', got %q", loaded[2].FileInfo.Error)
+	}
+
+	// Regular msg: no FileInfo
+	if loaded[3].FileInfo != nil {
+		t.Error("expected nil FileInfo on regular message")
+	}
+}
+
+func TestFileInfoSearch(t *testing.T) {
+	s := tempStore(t)
+
+	msgs := []storage.StoredMessage{
+		{
+			ID:      "file-1",
+			Sender:  "alice",
+			Content: "report.pdf",
+			FileInfo: &storage.StoredFileInfo{
+				Filename: "report.pdf",
+				Size:     1000,
+				State:    1,
+			},
+		},
+		{
+			ID:      "msg-1",
+			Sender:  "alice",
+			Content: "check the report",
+		},
+	}
+
+	s.SaveMessages("alice", msgs)
+
+	// Search should find both by "report"
+	results, err := s.Search("report")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	total := 0
+	for _, msgs := range results {
+		total += len(msgs)
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 results, got %d", total)
+	}
+}
+
 func TestChatKeyToFilename(t *testing.T) {
 	s := tempStore(t)
 

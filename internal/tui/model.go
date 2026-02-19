@@ -84,9 +84,11 @@ type StatusUpdatedMsg struct {
 	State    string
 }
 
-// FileSentMsg is sent after an async file send completes.
+// FileSentMsg is sent after an async file send starts (contains the message ID for tracking).
 type FileSentMsg struct {
-	Err error
+	ChatKey string
+	MsgID   string
+	Err     error
 }
 
 // searchResult holds one search hit.
@@ -209,7 +211,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.Err.Error()
 			m.errExpiry = time.Now().Add(3 * time.Second)
 		}
-		if m.view == ViewChat {
+		if m.view == ViewChat && msg.ChatKey == m.activeChatKey {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
 		}
 		return m, nil
@@ -527,7 +529,7 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.scrollOffset = 0
 		m.chatMgr.SendTyping(m.activeChatKey, false)
 
-		// Handle /file command
+		// Handle /file command (sends via Taildrop)
 		if strings.HasPrefix(content, "/file ") {
 			path := strings.TrimSpace(content[6:])
 			if strings.HasPrefix(m.activeChatKey, "group:") {
@@ -538,8 +540,8 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			chatKey := m.activeChatKey
 			chatMgr := m.chatMgr
 			return m, func() tea.Msg {
-				err := chatMgr.SendFile(chatKey, path)
-				return FileSentMsg{Err: err}
+				msgID, err := chatMgr.SendFile(chatKey, path)
+				return FileSentMsg{ChatKey: chatKey, MsgID: msgID, Err: err}
 			}
 		}
 
@@ -1038,6 +1040,19 @@ func (m Model) viewChat() string {
 			continue
 		}
 
+		// File transfer messages get special rendering
+		if msg.FileInfo != nil {
+			var sender string
+			if msg.IsOwn {
+				sender = ownMsgStyle.Render("you")
+			} else {
+				sender = peerMsgStyle.Render(msg.Sender)
+			}
+			b.WriteString(fmt.Sprintf("  %s %s: %s\n",
+				ts, sender, renderFileTransfer(msg.FileInfo)))
+			continue
+		}
+
 		var sender string
 		if msg.IsOwn {
 			sender = ownMsgStyle.Render("you")
@@ -1128,7 +1143,7 @@ func (m Model) viewChat() string {
 	b.WriteString("\n")
 
 	// Help
-	b.WriteString(helpStyle.Render("  enter send \u2022 tab :emoji: \u2022 ctrl+u/d scroll \u2022 /react /file \u2022 esc back"))
+	b.WriteString(helpStyle.Render("  enter send \u2022 tab :emoji: \u2022 ctrl+u/d scroll \u2022 /react /file (taildrop) \u2022 esc back"))
 
 	return appStyle.Render(b.String())
 }
@@ -1275,6 +1290,55 @@ func renderReactions(reactions []chat.Reaction) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+func renderFileTransfer(fi *chat.FileInfo) string {
+	size := formatFileSize(fi.Size)
+	switch fi.State {
+	case chat.FileSending:
+		return fileIcon.Render("\U0001f4e4") + " " +
+			fileSending.Render(fmt.Sprintf("%s (%s) sending...", fi.Filename, size)) +
+			deliveryPending.Render(" \u25cb")
+	case chat.FileSent:
+		return fileIcon.Render("\U0001f4e4") + " " +
+			fileSent.Render(fmt.Sprintf("%s (%s) sent", fi.Filename, size)) +
+			deliveryStyle.Render(" \u2713")
+	case chat.FileFailed:
+		errMsg := fi.Error
+		if errMsg == "" {
+			errMsg = "unknown error"
+		}
+		return fileIcon.Render("\U0001f4e4") + " " +
+			fileFailed.Render(fmt.Sprintf("%s failed: %s", fi.Filename, errMsg)) +
+			errorStyle.Render(" \u2717")
+	case chat.FileReceived:
+		path := fi.Path
+		if path == "" {
+			path = fi.Filename
+		}
+		return fileIcon.Render("\U0001f4e5") + " " +
+			fileReceived.Render(fmt.Sprintf("%s received \u2192 %s", fi.Filename, path))
+	default:
+		return fi.Filename
+	}
+}
+
+func formatFileSize(bytes int64) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+	)
+	switch {
+	case bytes >= GB:
+		return fmt.Sprintf("%.1f GB", float64(bytes)/float64(GB))
+	case bytes >= MB:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(MB))
+	case bytes >= KB:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
 }
 
 func truncate(s string, max int) string {

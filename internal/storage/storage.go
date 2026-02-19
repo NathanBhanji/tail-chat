@@ -20,12 +20,22 @@ type StoredMessage struct {
 	Delivered bool              `json:"delivered"`
 	Read      bool              `json:"read"`
 	Reactions []StoredReaction  `json:"reactions,omitempty"`
+	FileInfo  *StoredFileInfo   `json:"file_info,omitempty"`
 }
 
 // StoredReaction is a reaction on a message.
 type StoredReaction struct {
 	Emoji  string `json:"emoji"`
 	Sender string `json:"sender"`
+}
+
+// StoredFileInfo persists file transfer state.
+type StoredFileInfo struct {
+	Filename string `json:"filename"`
+	Size     int64  `json:"size"`
+	State    int    `json:"state"`
+	Error    string `json:"error,omitempty"`
+	Path     string `json:"path,omitempty"`
 }
 
 // StoredGroup is the on-disk representation of a group.

@@ -185,4 +185,21 @@ var (
 	scrollIndicator = lipgloss.NewStyle().
 			Foreground(dimText).
 			Italic(true)
+
+	// File transfer
+	fileSending = lipgloss.NewStyle().
+			Foreground(warning)
+
+	fileSent = lipgloss.NewStyle().
+			Foreground(success)
+
+	fileFailed = lipgloss.NewStyle().
+			Foreground(danger)
+
+	fileReceived = lipgloss.NewStyle().
+			Foreground(success)
+
+	fileIcon = lipgloss.NewStyle().
+			Foreground(secondary).
+			Bold(true)
 )
