@@ -85,20 +85,12 @@ type Model struct {
 	connectingDots int    // animation counter
 
 	// Group creation
-	groupName    string
-	groupMembers []string
-	groupCursor  int
-
-	// Pending group invites
-	pendingInvites []pendingInvite
+	groupName     string
+	groupSelected map[string]bool // hostname -> selected
+	groupCursor   int
 
 	// Components
 	input textinput.Model
-}
-
-type pendingInvite struct {
-	invite *protocol.GroupInvite
-	from   string
 }
 
 // NewModel creates the initial TUI model.
@@ -184,10 +176,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case GroupInviteMsg:
-		m.pendingInvites = append(m.pendingInvites, pendingInvite{
-			invite: msg.Invite,
-			from:   msg.From,
-		})
+		// Auto-accept: groups appear instantly on the peer list
+		m.chatMgr.AcceptGroupInvite(msg.Invite, msg.From)
 		return m, nil
 
 	case ErrorMsg:
@@ -243,7 +233,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handlePeerKeys(key string) (tea.Model, tea.Cmd) {
-	totalItems := len(m.peers) + len(m.chatMgr.Groups()) + len(m.pendingInvites)
+	totalItems := len(m.peers) + len(m.chatMgr.Groups())
 
 	switch key {
 	case "q":
@@ -263,23 +253,15 @@ func (m Model) handlePeerKeys(key string) (tea.Model, tea.Cmd) {
 		return m.selectPeerItem()
 
 	case "g":
-		// Create group
+		// Create group — start with name entry
 		m.view = ViewGroupCreate
 		m.groupName = ""
-		m.groupMembers = nil
+		m.groupSelected = make(map[string]bool)
 		m.groupCursor = 0
 		m.input.SetValue("")
 		m.input.Placeholder = "Group name..."
 		m.input.Focus()
 		return m, nil
-
-	case "a":
-		// Accept first pending invite
-		if len(m.pendingInvites) > 0 {
-			inv := m.pendingInvites[0]
-			m.chatMgr.AcceptGroupInvite(inv.invite, inv.from)
-			m.pendingInvites = m.pendingInvites[1:]
-		}
 
 	case "r":
 		// Refresh peers
@@ -343,14 +325,6 @@ func (m Model) selectPeerItem() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Check if cursor is on a pending invite
-	inviteIdx := m.peerCursor - len(m.peers) - len(groups)
-	if inviteIdx >= 0 && inviteIdx < len(m.pendingInvites) {
-		inv := m.pendingInvites[inviteIdx]
-		m.chatMgr.AcceptGroupInvite(inv.invite, inv.from)
-		m.pendingInvites = append(m.pendingInvites[:inviteIdx], m.pendingInvites[inviteIdx+1:]...)
-	}
-
 	return m, nil
 }
 
@@ -394,44 +368,81 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleGroupCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	// Phase 1: entering group name (text input active)
+	if m.groupName == "" {
+		switch key {
+		case "esc":
+			m.view = ViewPeers
+			m.input.Blur()
+			return m, nil
+		case "enter":
+			val := strings.TrimSpace(m.input.Value())
+			if val == "" {
+				return m, nil
+			}
+			m.groupName = val
+			m.input.SetValue("")
+			m.input.Blur()
+			m.groupCursor = 0
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+
+	// Phase 2: selecting members from peer list
+	connectedPeers := m.connectedPeers()
+
 	switch key {
 	case "esc":
 		m.view = ViewPeers
-		m.input.Blur()
 		return m, nil
 
-	case "enter":
-		val := strings.TrimSpace(m.input.Value())
-		if val == "" {
-			return m, nil
+	case "up", "k":
+		if m.groupCursor > 0 {
+			m.groupCursor--
 		}
 
-		if m.groupName == "" {
-			// First enter sets group name
-			m.groupName = val
-			m.input.SetValue("")
-			m.input.Placeholder = "Add member hostname (enter to add, esc when done)..."
-			return m, nil
+	case "down", "j":
+		if m.groupCursor < len(connectedPeers)-1 {
+			m.groupCursor++
 		}
 
-		// Add member
-		m.groupMembers = append(m.groupMembers, val)
-		m.input.SetValue("")
-		return m, nil
+	case " ", "enter":
+		// Toggle selection
+		if m.groupCursor < len(connectedPeers) {
+			host := connectedPeers[m.groupCursor]
+			m.groupSelected[host] = !m.groupSelected[host]
+		}
 
 	case "ctrl+s":
-		// Save group
-		if m.groupName != "" && len(m.groupMembers) > 0 {
-			m.chatMgr.CreateGroup(m.groupName, m.groupMembers)
+		// Create the group with selected members
+		var members []string
+		for host, sel := range m.groupSelected {
+			if sel {
+				members = append(members, host)
+			}
+		}
+		if len(members) > 0 {
+			m.chatMgr.CreateGroup(m.groupName, members)
 			m.view = ViewPeers
-			m.input.Blur()
 		}
 		return m, nil
 	}
 
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	return m, cmd
+	return m, nil
+}
+
+// connectedPeers returns hostnames of all peers we have an active connection to.
+func (m Model) connectedPeers() []string {
+	var result []string
+	for _, p := range m.peers {
+		if m.chatMgr.IsConnected(p.Hostname) {
+			result = append(result, p.Hostname)
+		}
+	}
+	return result
 }
 
 func (m Model) View() string {
@@ -517,28 +528,6 @@ func (m Model) viewPeers() string {
 
 		for _, g := range groups {
 			name := fmt.Sprintf("%s %s (%d members)", groupBadge.Render("#"), g.Name, len(g.Members))
-			if idx == m.peerCursor {
-				b.WriteString(peerSelected.Render(name))
-			} else {
-				b.WriteString(peerNormal.Render(name))
-			}
-			b.WriteString("\n")
-			idx++
-		}
-	}
-
-	// Pending invites
-	if len(m.pendingInvites) > 0 {
-		b.WriteString("\n")
-		b.WriteString(sidebarTitle.Render("  Invites"))
-		b.WriteString("\n")
-
-		for _, inv := range m.pendingInvites {
-			name := fmt.Sprintf("  %s from %s (%d members)",
-				connectingStyle.Render("⬤ "+inv.invite.GroupName),
-				inv.from,
-				len(inv.invite.Members),
-			)
 			if idx == m.peerCursor {
 				b.WriteString(peerSelected.Render(name))
 			} else {
@@ -664,25 +653,53 @@ func (m Model) viewGroupCreate() string {
 	b.WriteString("\n\n")
 
 	if m.groupName == "" {
+		// Phase 1: name entry
 		b.WriteString("  Enter group name:\n\n")
+		b.WriteString(inputStyle.Render(m.input.View()))
+		b.WriteString("\n\n")
+		b.WriteString(helpStyle.Render("  enter confirm • esc cancel"))
 	} else {
+		// Phase 2: member selection
 		b.WriteString(fmt.Sprintf("  Group: %s\n", groupBadge.Render("# "+m.groupName)))
 		b.WriteString("\n")
+		b.WriteString(sidebarTitle.Render("  Select members"))
+		b.WriteString("\n")
 
-		if len(m.groupMembers) > 0 {
-			b.WriteString("  Members:\n")
-			for _, member := range m.groupMembers {
-				b.WriteString(fmt.Sprintf("    %s %s\n", peerOnline.Render("●"), member))
+		connectedPeers := m.connectedPeers()
+		if len(connectedPeers) == 0 {
+			b.WriteString(helpStyle.Render("  No connected peers. Connect to peers first.\n"))
+		}
+
+		for i, host := range connectedPeers {
+			check := peerOffline.Render("[ ]")
+			if m.groupSelected[host] {
+				check = encryptedBadge.Render("[x]")
+			}
+
+			line := fmt.Sprintf("%s %s", check, host)
+			if i == m.groupCursor {
+				b.WriteString(peerSelected.Render(line))
+			} else {
+				b.WriteString(peerNormal.Render(line))
 			}
 			b.WriteString("\n")
 		}
 
-		b.WriteString("  Add member hostname:\n\n")
-	}
+		// Count selected
+		selected := 0
+		for _, sel := range m.groupSelected {
+			if sel {
+				selected++
+			}
+		}
+		if selected > 0 {
+			b.WriteString(fmt.Sprintf("\n  %s\n",
+				encryptedBadge.Render(fmt.Sprintf("%d selected", selected))))
+		}
 
-	b.WriteString(inputStyle.Render(m.input.View()))
-	b.WriteString("\n\n")
-	b.WriteString(helpStyle.Render("  enter add • ctrl+s create group • esc cancel"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  j/k navigate • space toggle • ctrl+s create • esc cancel"))
+	}
 
 	return appStyle.Render(b.String())
 }
