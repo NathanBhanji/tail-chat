@@ -342,6 +342,8 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if content == "" {
 			return m, nil
 		}
+		// Expand emoji shortcodes before sending
+		content = expandEmoji(content)
 		m.input.SetValue("")
 
 		// Send async so the TCP write doesn't block the UI
@@ -612,8 +614,10 @@ func (m Model) viewChat() string {
 			sender = peerMsgStyle.Render(msg.Sender)
 		}
 
+		// Render content with URL/GIF detection
+		rendered := renderContent(msg.Content)
 		b.WriteString(fmt.Sprintf("  %s %s: %s\n",
-			ts, sender, msgContentStyle.Render(msg.Content)))
+			ts, sender, rendered))
 	}
 
 	if len(msgs) == 0 {
@@ -641,7 +645,7 @@ func (m Model) viewChat() string {
 	b.WriteString("\n")
 
 	// Help
-	b.WriteString(helpStyle.Render("  enter send • esc back"))
+	b.WriteString(helpStyle.Render("  enter send • :emoji: shortcodes • esc back"))
 
 	return appStyle.Render(b.String())
 }

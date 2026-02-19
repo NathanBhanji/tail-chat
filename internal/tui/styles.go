@@ -126,4 +126,14 @@ var (
 	systemMsgStyle = lipgloss.NewStyle().
 			Foreground(warning).
 			Italic(true)
+
+	// URL style
+	urlStyle = lipgloss.NewStyle().
+			Foreground(secondary).
+			Underline(true)
+
+	// GIF/image label
+	gifLabel = lipgloss.NewStyle().
+			Foreground(warning).
+			Bold(true)
 )
