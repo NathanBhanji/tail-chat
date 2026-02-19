@@ -84,6 +84,12 @@ func run() error {
 		}
 	})
 
+	chatMgr.OnPeerConnect(func(hostname string) {
+		if program != nil {
+			program.Send(tui.PeerConnectMsg{Hostname: hostname})
+		}
+	})
+
 	// Create and run TUI
 	model := tui.NewModel(chatMgr, watcher)
 	program = tea.NewProgram(model, tea.WithAltScreen())

@@ -31,14 +31,16 @@ type Group struct {
 
 // Manager coordinates chat sessions, message encryption, and delivery.
 type Manager struct {
-	mu           sync.RWMutex
-	server       *tcnet.Server
-	keyPair      *crypto.KeyPair
-	hostname     string
-	messages     map[string][]Message // chatKey -> messages (hostname or group:id)
-	groups       map[string]*Group    // groupID -> group
-	onMessage    func(chatKey string, msg Message)
+	mu            sync.RWMutex
+	server        *tcnet.Server
+	keyPair       *crypto.KeyPair
+	hostname      string
+	messages      map[string][]Message // chatKey -> messages (hostname or group:id)
+	groups        map[string]*Group    // groupID -> group
+	unread        map[string]int       // chatKey -> unread count
+	onMessage     func(chatKey string, msg Message)
 	onGroupInvite func(invite *protocol.GroupInvite, from string)
+	onPeerConnect func(hostname string)
 }
 
 // NewManager creates a chat manager.
@@ -49,6 +51,7 @@ func NewManager(server *tcnet.Server, kp *crypto.KeyPair, hostname string) *Mana
 		hostname: hostname,
 		messages: make(map[string][]Message),
 		groups:   make(map[string]*Group),
+		unread:   make(map[string]int),
 	}
 
 	server.OnMessage(m.handleMessage)
@@ -67,8 +70,15 @@ func (m *Manager) OnGroupInvite(fn func(invite *protocol.GroupInvite, from strin
 	m.onGroupInvite = fn
 }
 
+// OnPeerConnect sets a callback for when a peer connects to us.
+func (m *Manager) OnPeerConnect(fn func(hostname string)) {
+	m.onPeerConnect = fn
+}
+
 func (m *Manager) handleConnect(c *tcnet.Connection) {
-	// Connection established, nothing extra needed for now
+	if m.onPeerConnect != nil {
+		m.onPeerConnect(c.PeerHostname)
+	}
 }
 
 func (m *Manager) handleMessage(c *tcnet.Connection, env *protocol.Envelope) {
@@ -91,12 +101,14 @@ func (m *Manager) handleMessage(c *tcnet.Connection, env *protocol.Envelope) {
 func (m *Manager) handleChatMessage(c *tcnet.Connection, env *protocol.Envelope) {
 	chatMsg, err := protocol.Unwrap[protocol.ChatMessage](env)
 	if err != nil {
+		m.systemMessage(c.PeerHostname, fmt.Sprintf("[failed to parse message: %v]", err))
 		return
 	}
 
 	// Decrypt
 	plaintext, err := crypto.Decrypt(c.SharedSecret, chatMsg.Ciphertext)
 	if err != nil {
+		m.systemMessage(c.PeerHostname, fmt.Sprintf("[failed to decrypt message: %v]", err))
 		return
 	}
 
@@ -111,6 +123,7 @@ func (m *Manager) handleChatMessage(c *tcnet.Connection, env *protocol.Envelope)
 	chatKey := c.PeerHostname
 	m.mu.Lock()
 	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.unread[chatKey]++
 	m.mu.Unlock()
 
 	// Send ack
@@ -118,6 +131,23 @@ func (m *Manager) handleChatMessage(c *tcnet.Connection, env *protocol.Envelope)
 	ackEnv, _ := protocol.Wrap(protocol.TypeAck, ack)
 	protocol.WriteMessage(c.Conn, ackEnv)
 
+	if m.onMessage != nil {
+		m.onMessage(chatKey, msg)
+	}
+}
+
+// systemMessage injects a local system message into a chat for error visibility.
+func (m *Manager) systemMessage(chatKey, text string) {
+	msg := Message{
+		ID:        uuid.New().String(),
+		Sender:    "system",
+		Content:   text,
+		Timestamp: time.Now(),
+		IsOwn:     false,
+	}
+	m.mu.Lock()
+	m.messages[chatKey] = append(m.messages[chatKey], msg)
+	m.mu.Unlock()
 	if m.onMessage != nil {
 		m.onMessage(chatKey, msg)
 	}
@@ -371,6 +401,20 @@ func (m *Manager) Groups() []*Group {
 		groups = append(groups, g)
 	}
 	return groups
+}
+
+// Unread returns the unread message count for a chat key.
+func (m *Manager) Unread(chatKey string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.unread[chatKey]
+}
+
+// ClearUnread resets the unread count for a chat key.
+func (m *Manager) ClearUnread(chatKey string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.unread, chatKey)
 }
 
 // IsConnected returns whether we have an active connection to a peer.

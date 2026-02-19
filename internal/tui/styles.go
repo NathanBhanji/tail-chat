@@ -116,4 +116,14 @@ var (
 	encryptedBadge = lipgloss.NewStyle().
 			Foreground(success).
 			Bold(true)
+
+	// Unread badge
+	unreadStyle = lipgloss.NewStyle().
+			Foreground(danger).
+			Bold(true)
+
+	// System message
+	systemMsgStyle = lipgloss.NewStyle().
+			Foreground(warning).
+			Italic(true)
 )

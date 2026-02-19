@@ -46,6 +46,11 @@ type GroupInviteMsg struct {
 	From   string
 }
 
+// PeerConnectMsg is sent when an inbound peer connects to us.
+type PeerConnectMsg struct {
+	Hostname string
+}
+
 // ErrorMsg is a transient error to display.
 type ErrorMsg struct {
 	Err error
@@ -130,9 +135,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case IncomingMsg:
-		if msg.ChatKey == m.activeChatKey {
+		if m.view == ViewChat && msg.ChatKey == m.activeChatKey {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
 		}
+		// Always return so the view re-renders (unread badges update)
+		return m, nil
+
+	case PeerConnectMsg:
+		// A peer connected inbound — refresh so the lock icon shows up
 		return m, nil
 
 	case PeersUpdatedMsg:
@@ -149,6 +159,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Switch to chat view
 			m.activeChatKey = msg.Hostname
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
+			m.chatMgr.ClearUnread(m.activeChatKey)
 			m.view = ViewChat
 			m.input.Placeholder = "Type a message..."
 			m.input.SetValue("")
@@ -179,6 +190,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Refresh peers
 		m.peers = m.peerWatcher.Peers()
+		// Defensive refresh: re-read messages when in chat view
+		if m.view == ViewChat && m.activeChatKey != "" {
+			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
+		}
 		return m, tickCmd()
 	}
 
@@ -274,6 +289,7 @@ func (m Model) selectPeerItem() (tea.Model, tea.Cmd) {
 		if m.chatMgr.IsConnected(peer.Hostname) {
 			m.activeChatKey = peer.Hostname
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
+			m.chatMgr.ClearUnread(m.activeChatKey)
 			m.view = ViewChat
 			m.input.Placeholder = "Type a message..."
 			m.input.SetValue("")
@@ -303,6 +319,7 @@ func (m Model) selectPeerItem() (tea.Model, tea.Cmd) {
 		group := groups[groupIdx]
 		m.activeChatKey = "group:" + group.ID
 		m.messages = m.chatMgr.GetMessages(m.activeChatKey)
+		m.chatMgr.ClearUnread(m.activeChatKey)
 		m.view = ViewChat
 		m.input.Placeholder = "Type a message..."
 		m.input.SetValue("")
@@ -462,7 +479,12 @@ func (m Model) viewPeers() string {
 			connStatus = encryptedBadge.Render(" 🔒")
 		}
 
-		name := fmt.Sprintf("%s %s  %s%s", dot, peer.Hostname, helpStyle.Render(peer.TailscaleIP), connStatus)
+		unreadBadge := ""
+		if n := m.chatMgr.Unread(peer.Hostname); n > 0 {
+			unreadBadge = unreadStyle.Render(fmt.Sprintf(" (%d)", n))
+		}
+
+		name := fmt.Sprintf("%s %s  %s%s%s", dot, peer.Hostname, helpStyle.Render(peer.TailscaleIP), connStatus, unreadBadge)
 
 		if idx == m.peerCursor {
 			b.WriteString(peerSelected.Render(name))
@@ -575,6 +597,12 @@ func (m Model) viewChat() string {
 		msg := msgs[i]
 		ts := msgTimeStyle.Render(msg.Timestamp.Format("15:04"))
 
+		if msg.Sender == "system" {
+			b.WriteString(fmt.Sprintf("  %s %s\n",
+				ts, systemMsgStyle.Render(msg.Content)))
+			continue
+		}
+
 		var sender string
 		if msg.IsOwn {
 			sender = ownMsgStyle.Render("you")
@@ -596,6 +624,12 @@ func (m Model) viewChat() string {
 		msgLines = 1
 	}
 	for i := msgLines; i < availHeight; i++ {
+		b.WriteString("\n")
+	}
+
+	// Error in chat view
+	if m.err != "" {
+		b.WriteString(errorStyle.Render("  " + m.err))
 		b.WriteString("\n")
 	}
 
