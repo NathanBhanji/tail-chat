@@ -1,0 +1,9 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "tailchat-gui",
+  "outputfilename": "tailchat-gui",
+  "frontend:dir": "frontend",
+  "author": {
+    "name": "TailChat"
+  }
+}

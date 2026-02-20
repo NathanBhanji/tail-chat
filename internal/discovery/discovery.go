@@ -12,12 +12,12 @@ import (
 
 // Peer represents a machine on the tailnet.
 type Peer struct {
-	Hostname    string
-	DNSName     string
-	TailscaleIP string
-	Online      bool
-	OS          string
-	IsSelf      bool
+	Hostname    string `json:"hostname"`
+	DNSName     string `json:"dnsName"`
+	TailscaleIP string `json:"tailscaleIP"`
+	Online      bool   `json:"online"`
+	OS          string `json:"os"`
+	IsSelf      bool   `json:"isSelf"`
 }
 
 // tailscaleStatus maps the JSON output of `tailscale status --json`.

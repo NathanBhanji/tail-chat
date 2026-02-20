@@ -14,19 +14,19 @@ import (
 
 // Message is a decrypted chat message ready for display.
 type Message struct {
-	ID        string
-	Sender    string
-	Content   string
-	Timestamp time.Time
-	IsOwn     bool
-	GroupID   string // empty for 1:1
+	ID        string    `json:"id"`
+	Sender    string    `json:"sender"`
+	Content   string    `json:"content"`
+	Timestamp time.Time `json:"timestamp"`
+	IsOwn     bool      `json:"isOwn"`
+	GroupID   string    `json:"groupID"`
 }
 
 // Group represents a group chat.
 type Group struct {
-	ID      string
-	Name    string
-	Members []string // hostnames
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Members []string `json:"members"`
 }
 
 // Manager coordinates chat sessions, message encryption, and delivery.
