@@ -29,6 +29,30 @@ const MOCK_MESSAGES: Record<string, any[]> = {
   ],
 };
 
+const MOCK_GROUPS = [
+  { ID: 'group-1', Name: 'project-alpha', Members: ['my-macbook', 'alice-macbook', 'bob-desktop'] },
+  { ID: 'group-2', Name: 'tailchat-dev', Members: ['my-macbook', 'alice-macbook', 'bob-desktop', 'charlie-laptop'] },
+];
+
+const MOCK_GROUP_MESSAGES: Record<string, any[]> = {
+  'group:group-1': [
+    { ID: 'g1', Sender: 'alice-macbook', Content: 'hey team, project alpha is looking good', Timestamp: new Date(Date.now() - 500000).toISOString(), IsOwn: false, GroupID: 'group-1', State: 0, Reactions: null },
+    { ID: 'g2', Sender: 'me', Content: 'agreed, the encryption layer is solid', Timestamp: new Date(Date.now() - 400000).toISOString(), IsOwn: true, GroupID: 'group-1', State: 2, Reactions: [{ Emoji: '👍', Sender: 'alice-macbook' }] },
+    { ID: 'g3', Sender: 'bob-desktop', Content: 'just pushed the latest changes to the repo', Timestamp: new Date(Date.now() - 300000).toISOString(), IsOwn: false, GroupID: 'group-1', State: 0, Reactions: null },
+    { ID: 'g4', Sender: 'alice-macbook', Content: 'nice work bob! ill review it tomorrow', Timestamp: new Date(Date.now() - 200000).toISOString(), IsOwn: false, GroupID: 'group-1', State: 0, Reactions: null },
+    { ID: 'g5', Sender: 'me', Content: 'lets sync up next week on the roadmap', Timestamp: new Date(Date.now() - 100000).toISOString(), IsOwn: true, GroupID: 'group-1', State: 1, Reactions: null },
+  ],
+  'group:group-2': [
+    { ID: 'g10', Sender: 'bob-desktop', Content: 'anyone else seeing the build fail on arm64?', Timestamp: new Date(Date.now() - 600000).toISOString(), IsOwn: false, GroupID: 'group-2', State: 0, Reactions: null },
+    { ID: 'g11', Sender: 'me', Content: 'yeah, its a CGO issue with the webview binding', Timestamp: new Date(Date.now() - 550000).toISOString(), IsOwn: true, GroupID: 'group-2', State: 2, Reactions: null },
+    { ID: 'g12', Sender: 'alice-macbook', Content: 'I can reproduce on my M2, will dig into it', Timestamp: new Date(Date.now() - 500000).toISOString(), IsOwn: false, GroupID: 'group-2', State: 0, Reactions: [{ Emoji: '🔥', Sender: 'me' }] },
+  ],
+};
+
+const MOCK_GROUP_INVITES = [
+  { groupID: 'group-3', groupName: 'weekend-plans', members: ['my-macbook', 'alice-macbook', 'eve-phone'], from: 'alice-macbook' },
+];
+
 const MOCK_GIFS = Array.from({ length: 12 }, (_, i) => ({
   ID: `gif-${i}`,
   Title: `GIF ${i}`,
@@ -81,7 +105,7 @@ if (!IS_WAILS) {
 
 export async function GetPeers() { return MOCK_PEERS; }
 export async function GetSelfInfo() { return { hostname: 'my-macbook', ip: '100.64.0.1' }; }
-export async function GetMessages(chatKey: string) { return MOCK_MESSAGES[chatKey] || []; }
+export async function GetMessages(chatKey: string) { return MOCK_MESSAGES[chatKey] || MOCK_GROUP_MESSAGES[chatKey] || []; }
 export async function SendMessage(peer: string, content: string) {
   if (!MOCK_MESSAGES[peer]) MOCK_MESSAGES[peer] = [];
   MOCK_MESSAGES[peer].push({
@@ -101,15 +125,42 @@ export async function ConnectToPeer(_ip: string) {}
 export async function IsReady() { return true; }
 export async function NotifyFrontendReady() { emit('ready', true); }
 export async function IsConnected(_hostname: string) { return true; }
-export async function GetUnread(key: string) { return key === 'bob-desktop' ? 2 : 0; }
+export async function GetUnread(key: string) { return key === 'bob-desktop' ? 2 : key === 'group:group-2' ? 1 : 0; }
 export async function ClearUnread(_key: string) {}
 export async function GetPeerStatus(_hostname: string) { return 'available'; }
 export async function SearchGifs(_query: string, _limit: number) { return PLACEHOLDER_GIFS; }
 export async function TrendingGifs(_limit: number) { return PLACEHOLDER_GIFS; }
 export async function SearchMessages(_query: string) { return {}; }
-export async function SendGroupMessage(_groupID: string, _content: string) {}
-export async function CreateGroup(_name: string, _members: string[]) { return { ID: '', Name: '', Members: [] }; }
-export async function GetGroups() { return []; }
+export async function SendGroupMessage(groupID: string, content: string) {
+  const chatKey = `group:${groupID}`;
+  if (!MOCK_GROUP_MESSAGES[chatKey]) MOCK_GROUP_MESSAGES[chatKey] = [];
+  MOCK_GROUP_MESSAGES[chatKey].push({
+    ID: `gmsg-${Date.now()}`,
+    Sender: 'me',
+    Content: content,
+    Timestamp: new Date().toISOString(),
+    IsOwn: true,
+    GroupID: groupID,
+    State: 1,
+    Reactions: null,
+  });
+}
+export async function CreateGroup(name: string, members: string[]) {
+  const id = `group-${Date.now()}`;
+  const group = { ID: id, Name: name, Members: ['my-macbook', ...members] };
+  MOCK_GROUPS.push(group);
+  return group;
+}
+export async function GetGroups() { return MOCK_GROUPS; }
+export async function AcceptGroupInvite(_groupID: string, _groupName: string, _members: string[], _fromHost: string) {
+  // In mock: move the invite into groups
+  const idx = MOCK_GROUP_INVITES.findIndex(i => i.groupID === _groupID);
+  if (idx >= 0) {
+    const inv = MOCK_GROUP_INVITES.splice(idx, 1)[0];
+    MOCK_GROUPS.push({ ID: inv.groupID, Name: inv.groupName, Members: inv.members });
+  }
+}
+export async function GetGroupInvites() { return MOCK_GROUP_INVITES; }
 export async function SetStatus(_state: string) {}
 export async function ListThemes() {
   return [

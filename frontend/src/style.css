@@ -26,12 +26,16 @@
   --color-tc-accent-bg: oklch(0.80 0.20 160 / 0.07);
   --color-tc-accent-border: oklch(0.80 0.20 160 / 0.18);
 
+  /* Secondary accent — cool blue for "theirs" messages */
+  --color-tc-secondary: #6cb4ff;
+  --color-tc-secondary-dim: #5a9ee6;
+
   /* Semantic */
   --color-tc-danger: #ff6b6b;
   --color-tc-warning: #fbbf24;
   --color-tc-info: #6cb4ff;
   --color-tc-online: #39ff9f;
-  --color-tc-offline: #4a4a5e;
+  --color-tc-offline: #3a3a4a;
 
   /* Messages — Slack-style flat rows, not bubbles */
   --color-tc-msg-hover: #14141c;

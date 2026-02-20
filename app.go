@@ -327,6 +327,19 @@ func (a *App) GetGroups() []*chat.Group {
 	return a.chatMgr.Groups()
 }
 
+// AcceptGroupInvite accepts a pending group invite.
+func (a *App) AcceptGroupInvite(groupID, groupName string, members []string, fromHost string) {
+	if a.chatMgr == nil {
+		return
+	}
+	invite := &protocol.GroupInvite{
+		GroupID:   groupID,
+		GroupName: groupName,
+		Members:   members,
+	}
+	a.chatMgr.AcceptGroupInvite(invite, fromHost)
+}
+
 // ─── Tenor GIF bindings ────────────────────────────────────────────
 
 // SearchGifs searches Tenor for GIFs.

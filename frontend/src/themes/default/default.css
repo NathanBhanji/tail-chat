@@ -1,0 +1,430 @@
+/* ─── Cipher Lounge — Default Theme Styles ─── */
+/* Refined dark intelligence aesthetic: warm depths, precision accents */
+
+/* ── Sidebar atmosphere ── */
+.cl-sidebar {
+  background:
+    linear-gradient(180deg, #111116 0%, #0e0e14 50%, #0c0c11 100%);
+  border-right: 1px solid rgba(255,255,255,0.04);
+}
+
+.cl-sidebar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 120px;
+  background: radial-gradient(ellipse 80% 100% at 30% 0%, rgba(57,255,159,0.04) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Brand mark ── */
+.cl-brand {
+  position: relative;
+  z-index: 1;
+}
+
+.cl-brand-text {
+  background: linear-gradient(135deg, #39ff9f 0%, #2bcc7f 50%, #6cb4ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Peer list ── */
+.cl-peer {
+  position: relative;
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  border-left: 2px solid transparent;
+}
+
+.cl-peer:hover {
+  background: rgba(255,255,255,0.025);
+  transform: translateX(2px);
+}
+
+.cl-peer-active {
+  background: rgba(57,255,159,0.06) !important;
+  border-left-color: #39ff9f !important;
+}
+
+.cl-peer-active::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: #39ff9f;
+  box-shadow: 0 0 8px rgba(57,255,159,0.5), 0 0 16px rgba(57,255,159,0.2);
+  border-radius: 2px;
+}
+
+/* ── Avatar with unique gradient per peer ── */
+.cl-avatar {
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+}
+
+.cl-avatar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid rgba(255,255,255,0.06);
+  pointer-events: none;
+}
+
+/* ── Status dot ── */
+.cl-status-online {
+  background: #39ff9f;
+  box-shadow: 0 0 6px rgba(57,255,159,0.6);
+  animation: cl-pulse 3s ease-in-out infinite;
+}
+
+.cl-status-tailchat {
+  background: #39ff9f;
+  box-shadow: 0 0 8px rgba(57,255,159,0.8);
+  animation: cl-pulse 2.5s ease-in-out infinite;
+}
+
+.cl-status-offline {
+  background: #3a3a4a;
+}
+
+/* ── Chat area backdrop ── */
+.cl-chat-area {
+  position: relative;
+  isolation: isolate;
+}
+
+.cl-chat-area::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 50% 40% at 75% 15%, rgba(57,255,159,0.015) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 50% at 20% 80%, rgba(108,180,255,0.012) 0%, transparent 60%);
+}
+
+/* ── Message groups ── */
+.cl-msg-group {
+  position: relative;
+  padding-left: 14px;
+  margin-bottom: 16px;
+}
+
+.cl-msg-group::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 2px;
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+}
+
+.cl-msg-group:hover::before {
+  opacity: 0.8;
+}
+
+.cl-msg-group-own::before {
+  background: linear-gradient(180deg, #39ff9f, rgba(57,255,159,0.2));
+}
+
+.cl-msg-group-other::before {
+  background: linear-gradient(180deg, #6cb4ff, rgba(108,180,255,0.2));
+}
+
+/* ── Individual message rows ── */
+.cl-msg-row {
+  transition: background 0.1s ease;
+  border-radius: 6px;
+  margin: 0 -8px;
+  padding: 3px 8px;
+}
+
+.cl-msg-row:hover {
+  background: rgba(255,255,255,0.015);
+}
+
+/* ── Hover reaction bar ── */
+.cl-reactions-bar {
+  opacity: 0;
+  transition: opacity 0.1s ease, transform 0.15s ease;
+  transform: translateY(2px);
+}
+
+.group\/msg:hover .cl-reactions-bar {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── Input panel ── */
+.cl-input-panel {
+  background: rgba(17,17,22,0.8);
+  backdrop-filter: blur(12px) saturate(1.3);
+  -webkit-backdrop-filter: blur(12px) saturate(1.3);
+  border-top: 1px solid rgba(255,255,255,0.04);
+}
+
+.cl-textarea {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: #e8e8f0;
+  outline: none;
+  transition: all 0.2s ease;
+  font-family: var(--font-sans);
+}
+
+.cl-textarea::placeholder {
+  color: rgba(232,232,240,0.2);
+}
+
+.cl-textarea:focus {
+  border-color: rgba(57,255,159,0.2);
+  background: rgba(255,255,255,0.04);
+  box-shadow: 0 0 0 3px rgba(57,255,159,0.04), inset 0 0 20px rgba(57,255,159,0.01);
+}
+
+/* ── Send button ── */
+.cl-send-btn {
+  background: linear-gradient(135deg, #39ff9f, #2bcc7f);
+  color: #0a0a0f;
+  border: none;
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cl-send-btn:hover:not(:disabled) {
+  box-shadow: 0 0 16px rgba(57,255,159,0.4), 0 0 32px rgba(57,255,159,0.15);
+  transform: scale(1.05);
+}
+
+.cl-send-btn:disabled {
+  background: rgba(255,255,255,0.04);
+  color: rgba(232,232,240,0.15);
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+/* ── GIF button ── */
+.cl-gif-btn {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: rgba(232,232,240,0.3);
+  transition: all 0.2s ease;
+}
+
+.cl-gif-btn:hover {
+  color: #e8b931;
+  border-color: rgba(232,185,49,0.2);
+  background: rgba(232,185,49,0.04);
+}
+
+/* ── Chat header ── */
+.cl-header {
+  background: rgba(17,17,22,0.6);
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+/* ── Badge ── */
+.cl-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  font-family: var(--font-mono);
+}
+
+.cl-badge-e2e {
+  background: rgba(57,255,159,0.08);
+  border: 1px solid rgba(57,255,159,0.12);
+  color: #39ff9f;
+}
+
+.cl-badge-connected {
+  background: rgba(57,255,159,0.06);
+  border: 1px solid rgba(57,255,159,0.08);
+  color: rgba(57,255,159,0.7);
+}
+
+.cl-badge-os {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.04);
+  color: rgba(232,232,240,0.3);
+}
+
+/* ── Unread badge ── */
+.cl-unread {
+  background: linear-gradient(135deg, #39ff9f, #2bcc7f);
+  color: #0a0a0f;
+  font-weight: 700;
+  box-shadow: 0 0 10px rgba(57,255,159,0.4);
+  font-family: var(--font-mono);
+}
+
+/* ── Empty state ── */
+.cl-empty-icon {
+  position: relative;
+}
+
+.cl-empty-icon::before {
+  content: '';
+  position: absolute;
+  inset: -12px;
+  border-radius: 24px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(57,255,159,0.08),
+    rgba(108,180,255,0.06),
+    rgba(57,255,159,0.02),
+    rgba(108,180,255,0.08),
+    rgba(57,255,159,0.08)
+  );
+  animation: cl-rotate 8s linear infinite;
+  z-index: -1;
+}
+
+.cl-empty-icon::after {
+  content: '';
+  position: absolute;
+  inset: -10px;
+  border-radius: 22px;
+  background: #0a0a0f;
+  z-index: -1;
+}
+
+/* ── GIF picker ── */
+.cl-gif-panel {
+  background: rgba(17,17,22,0.95);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+/* ── Settings theme card ── */
+.cl-theme-card {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.04);
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  cursor: pointer;
+}
+
+.cl-theme-card:hover {
+  border-color: rgba(57,255,159,0.15);
+  background: rgba(57,255,159,0.03);
+  transform: translateY(-1px);
+}
+
+.cl-theme-card-active {
+  border-color: rgba(57,255,159,0.25) !important;
+  background: rgba(57,255,159,0.06) !important;
+  box-shadow: 0 0 20px rgba(57,255,159,0.05);
+}
+
+/* ── Search input ── */
+.cl-search {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.04);
+  color: #e8e8f0;
+  outline: none;
+  transition: all 0.2s ease;
+  font-family: var(--font-sans);
+}
+
+.cl-search::placeholder {
+  color: rgba(232,232,240,0.18);
+}
+
+.cl-search:focus {
+  border-color: rgba(57,255,159,0.15);
+  background: rgba(255,255,255,0.035);
+}
+
+/* ── Section header ── */
+.cl-section-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(232,232,240,0.18);
+  padding: 16px 10px 6px;
+}
+
+/* ── Scrollbar ── */
+.cl-sidebar ::-webkit-scrollbar { width: 3px; }
+.cl-sidebar ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 99px; }
+
+/* ── Reaction pill ── */
+.cl-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.05);
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.cl-reaction:hover {
+  border-color: rgba(57,255,159,0.15);
+  background: rgba(57,255,159,0.04);
+}
+
+/* ── Delivery state ── */
+.cl-state-read { color: #2bcc7f; }
+.cl-state-delivered { color: rgba(232,232,240,0.25); }
+.cl-state-sending { color: rgba(232,232,240,0.12); }
+
+/* ── Keyframes ── */
+@keyframes cl-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+@keyframes cl-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes cl-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Settings button ── */
+.cl-settings-btn {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.04);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.cl-settings-btn:hover {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.08);
+}
+
+.cl-settings-btn-active {
+  background: rgba(57,255,159,0.06) !important;
+  border-color: rgba(57,255,159,0.15) !important;
+  color: #39ff9f !important;
+}

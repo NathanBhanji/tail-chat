@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { Peer, Message, GIF, ThemeInfo, ThemeProps } from './themes/types';
+import type { Peer, Message, GIF, ThemeInfo, ThemeProps, Group, GroupInvite } from './themes/types';
 import DefaultTheme from './themes/default/Theme';
 import AuroraTheme from './themes/aurora/Theme';
 import VaporTheme from './themes/vapor/Theme';
@@ -40,6 +40,7 @@ const GetPeers = api<() => Promise<Peer[]>>('GetPeers');
 const GetSelfInfo = api<() => Promise<Record<string, string>>>('GetSelfInfo');
 const GetMessages = api<(k: string) => Promise<Message[]>>('GetMessages');
 const SendMessage = api<(p: string, c: string) => Promise<void>>('SendMessage');
+const SendGroupMessage = api<(groupID: string, content: string) => Promise<void>>('SendGroupMessage');
 const SendTyping = api<(k: string, t: boolean) => Promise<void>>('SendTyping');
 const SendReaction = api<(k: string, m: string, e: string) => Promise<void>>('SendReaction');
 const SendReadReceipts = api<(k: string) => Promise<void>>('SendReadReceipts');
@@ -55,10 +56,13 @@ const _ListThemes = api<() => Promise<ThemeInfo[]>>('ListThemes');
 const _GetActiveTheme = api<() => Promise<string>>('GetActiveTheme');
 const _SetTheme = api<(n: string) => Promise<void>>('SetTheme');
 
+// Group bindings
+const _GetGroups = api<() => Promise<Group[]>>('GetGroups');
+const _CreateGroup = api<(name: string, members: string[]) => Promise<Group>>('CreateGroup');
+const _AcceptGroupInvite = api<(groupID: string, groupName: string, members: string[], fromHost: string) => Promise<void>>('AcceptGroupInvite');
+const _GetGroupInvites = api<() => Promise<GroupInvite[]>>('GetGroupInvites');
+
 // ─── Theme registry ─────────────────────────────────────────────────
-// Built-in themes are React components. External themes (filesystem) are
-// full HTML/CSS/JS replacements served by the Go backend — those require
-// a page reload and aren't in this registry.
 
 const THEME_COMPONENTS: Record<string, React.ComponentType<ThemeProps>> = {
   default: DefaultTheme,
@@ -73,6 +77,8 @@ export default function App() {
   const [peers, setPeers] = useState<Peer[]>([]);
   const [selfInfo, setSelfInfo] = useState({ hostname: '', ip: '' });
   const [activePeer, setActivePeer] = useState('');
+  const [activeGroup, setActiveGroup] = useState<Group | null>(null);
+  const [activeChat, setActiveChat] = useState('');   // chatKey: hostname or 'group:<id>'
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -88,6 +94,8 @@ export default function App() {
   const [view, setView] = useState<'chat' | 'settings'>('chat');
   const [themes, setThemes] = useState<ThemeInfo[]>([]);
   const [activeTheme, setActiveTheme] = useState('default');
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [groupInvites, setGroupInvites] = useState<GroupInvite[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -110,35 +118,40 @@ export default function App() {
     } catch { /* */ }
   }, []);
 
-  const refreshMessages = useCallback(async (key: string) => {
-    try { setMessages(await GetMessages(key) || []); } catch { /* */ }
+  const refreshMessages = useCallback(async (chatKey: string) => {
+    try { setMessages(await GetMessages(chatKey) || []); } catch { /* */ }
   }, []);
 
-  const refreshUnread = useCallback(async (key: string) => {
-    try { GetUnread(key).then(c => setUnread(prev => ({ ...prev, [key]: c }))); } catch { /* */ }
+  const refreshUnread = useCallback(async (chatKey: string) => {
+    try { GetUnread(chatKey).then(c => setUnread(prev => ({ ...prev, [chatKey]: c }))); } catch { /* */ }
+  }, []);
+
+  const refreshGroups = useCallback(async () => {
+    try { setGroups(await _GetGroups() || []); } catch { /* */ }
+  }, []);
+
+  const refreshGroupInvites = useCallback(async () => {
+    try { setGroupInvites(await _GetGroupInvites() || []); } catch { /* */ }
   }, []);
 
   // ─── Backend events ─────────────────────────────────────────────
 
-  // Shared handler for when the backend is ready — called by either
-  // the "ready" event OR the IsReady() poll (whichever fires first).
   const handleReady = useCallback(() => {
     setReady(true);
     GetSelfInfo().then(info => setSelfInfo({ hostname: info?.['hostname'] || '', ip: info?.['ip'] || '' }));
     refreshPeers();
+    refreshGroups();
+    refreshGroupInvites();
     _GetActiveTheme().then(t => { if (t && THEME_COMPONENTS[t]) setActiveTheme(t); });
-  }, [refreshPeers]);
+  }, [refreshPeers, refreshGroups, refreshGroupInvites]);
 
   useEffect(() => {
-    let pollId: number | undefined;
-
     backendReady.then(() => {
-      // Listen for the event (covers case where backend finishes after JS loads)
       EventsOn('ready', handleReady);
       EventsOn('error', (msg: string) => setError(msg));
       EventsOn('peers:updated', (p: Peer[]) => setPeers(p || []));
       EventsOn('chat:message', (d: { chatKey: string }) => {
-        if (d.chatKey === activePeer) refreshMessages(activePeer);
+        if (d.chatKey === activeChat) refreshMessages(activeChat);
         refreshUnread(d.chatKey);
       });
       EventsOn('chat:typing', (d: { chatKey: string; isTyping: boolean }) => {
@@ -146,24 +159,35 @@ export default function App() {
       });
       EventsOn('chat:peerConnect', () => refreshPeers());
       EventsOn('chat:reaction', (d: { chatKey: string }) => {
-        if (d.chatKey === activePeer) refreshMessages(activePeer);
+        if (d.chatKey === activeChat) refreshMessages(activeChat);
       });
       EventsOn('chat:status', () => refreshPeers());
+      EventsOn('chat:groupInvite', (d: { invite: any; from: string }) => {
+        const inv: GroupInvite = {
+          groupID: d.invite.group_id || d.invite.GroupID,
+          groupName: d.invite.group_name || d.invite.GroupName,
+          members: d.invite.members || d.invite.Members || [],
+          from: d.from,
+        };
+        setGroupInvites(prev => {
+          if (prev.some(i => i.groupID === inv.groupID)) return prev;
+          return [...prev, inv];
+        });
+      });
 
-      // Tell the Go backend all listeners are registered.
-      // The backend waits for this before emitting "ready".
       NotifyFrontendReady();
     });
-  }, [activePeer, handleReady]);
+  }, [activeChat, handleReady]);
 
   useEffect(() => {
     if (!ready) return;
     const id = setInterval(() => {
       refreshPeers();
-      if (activePeer) refreshMessages(activePeer);
+      if (activeChat) refreshMessages(activeChat);
+      refreshGroups();
     }, 3000);
     return () => clearInterval(id);
-  }, [ready, activePeer]);
+  }, [ready, activeChat, refreshGroups]);
 
   useEffect(() => {
     if (view === 'settings') {
@@ -175,6 +199,8 @@ export default function App() {
 
   const onSelectPeer = useCallback(async (peer: Peer) => {
     setActivePeer(peer.Hostname);
+    setActiveGroup(null);
+    setActiveChat(peer.Hostname);
     setMessages([]);
     setView('chat');
     if (!connected[peer.Hostname] && peer.RunningTailchat) {
@@ -187,12 +213,32 @@ export default function App() {
     setTimeout(() => textareaRef.current?.focus(), 100);
   }, [connected, refreshMessages]);
 
+  const onSelectGroup = useCallback(async (group: Group) => {
+    const chatKey = `group:${group.ID}`;
+    setActivePeer('');
+    setActiveGroup(group);
+    setActiveChat(chatKey);
+    setMessages([]);
+    setView('chat');
+    await refreshMessages(chatKey);
+    ClearUnread(chatKey);
+    setUnread(prev => ({ ...prev, [chatKey]: 0 }));
+    setTimeout(() => textareaRef.current?.focus(), 100);
+  }, [refreshMessages]);
+
   const onSend = useCallback(async () => {
     const text = inputText.trim();
-    if (!text || !activePeer) return;
+    if (!text || !activeChat) return;
     setInputText('');
-    try { await SendMessage(activePeer, text); await refreshMessages(activePeer); } catch (e) { setError(String(e)); }
-  }, [inputText, activePeer, refreshMessages]);
+    try {
+      if (activeGroup) {
+        await SendGroupMessage(activeGroup.ID, text);
+      } else if (activePeer) {
+        await SendMessage(activePeer, text);
+      }
+      await refreshMessages(activeChat);
+    } catch (e) { setError(String(e)); }
+  }, [inputText, activeChat, activeGroup, activePeer, refreshMessages]);
 
   const onInputKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
@@ -200,12 +246,12 @@ export default function App() {
 
   const onInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInputText(e.target.value);
-    if (activePeer) {
+    if (activePeer && !activeGroup) {
       SendTyping(activePeer, true);
       if (typingRef.current) clearTimeout(typingRef.current);
       typingRef.current = window.setTimeout(() => SendTyping(activePeer, false), 2000);
     }
-  }, [activePeer]);
+  }, [activePeer, activeGroup]);
 
   const onOpenGifs = useCallback(async () => {
     setShowGifPicker(true); setGifQuery(''); setGifLoading(true);
@@ -228,24 +274,57 @@ export default function App() {
 
   const onPickGif = useCallback(async (gif: GIF) => {
     setShowGifPicker(false);
-    if (!activePeer) return;
+    if (!activeChat) return;
     const url = gif.Media.GIF?.URL || gif.URL;
-    try { await SendMessage(activePeer, url); await refreshMessages(activePeer); } catch (e) { setError(String(e)); }
-  }, [activePeer, refreshMessages]);
+    try {
+      if (activeGroup) {
+        await SendGroupMessage(activeGroup.ID, url);
+      } else if (activePeer) {
+        await SendMessage(activePeer, url);
+      }
+      await refreshMessages(activeChat);
+    } catch (e) { setError(String(e)); }
+  }, [activeChat, activeGroup, activePeer, refreshMessages]);
 
   const onReaction = useCallback((msgID: string, emoji: string) => {
-    if (!activePeer) return;
-    SendReaction(activePeer, msgID, emoji);
-    setTimeout(() => refreshMessages(activePeer), 200);
-  }, [activePeer, refreshMessages]);
+    if (!activeChat) return;
+    SendReaction(activeChat, msgID, emoji);
+    setTimeout(() => refreshMessages(activeChat), 200);
+  }, [activeChat, refreshMessages]);
+
+  const onCreateGroup = useCallback(async (name: string, members: string[]) => {
+    try {
+      const group = await _CreateGroup(name, members);
+      if (group) {
+        await refreshGroups();
+        // Auto-select the new group
+        const chatKey = `group:${group.ID}`;
+        setActivePeer('');
+        setActiveGroup(group);
+        setActiveChat(chatKey);
+        setMessages([]);
+        setView('chat');
+      }
+    } catch (e) { setError(String(e)); }
+  }, [refreshGroups]);
+
+  const onAcceptGroupInvite = useCallback(async (invite: GroupInvite) => {
+    try {
+      await _AcceptGroupInvite(invite.groupID, invite.groupName, invite.members, invite.from);
+      setGroupInvites(prev => prev.filter(i => i.groupID !== invite.groupID));
+      await refreshGroups();
+    } catch (e) { setError(String(e)); }
+  }, [refreshGroups]);
+
+  const onDeclineGroupInvite = useCallback((invite: GroupInvite) => {
+    setGroupInvites(prev => prev.filter(i => i.groupID !== invite.groupID));
+  }, []);
 
   const onSetTheme = useCallback(async (name: string) => {
     if (THEME_COMPONENTS[name]) {
-      // Built-in theme — switch instantly
       setActiveTheme(name);
       await _SetTheme(name);
     } else {
-      // External filesystem theme — save and reload
       await _SetTheme(name);
       window.location.reload();
     }
@@ -254,9 +333,7 @@ export default function App() {
   const onSetView = useCallback((v: 'chat' | 'settings') => setView(v), []);
   const onSearchChange = useCallback((q: string) => setSearchQuery(q), []);
 
-  // Auto-scroll only when new messages arrive (not on poll refreshes).
-  // Track previous count so polling the same messages doesn't yank
-  // the user back to the bottom while they're reading history.
+  // Auto-scroll only when new messages arrive
   const prevMsgCountRef = useRef(0);
   useEffect(() => {
     if (messages.length > prevMsgCountRef.current) {
@@ -292,11 +369,13 @@ export default function App() {
   const activePeerData = peers.find(p => p.Hostname === activePeer);
 
   const themeProps: ThemeProps = {
-    peers, selfInfo, activePeer, activePeerData, messages, typing, unread, connected,
+    peers, selfInfo, activePeer, activePeerData, activeGroup, activeChat,
+    messages, typing, unread, connected, groups, groupInvites,
     themes, activeTheme, error, inputText, searchQuery, showGifPicker, gifQuery,
     gifResults, gifLoading, view,
-    onSelectPeer, onSend, onInputChange, onInputKeyDown, onSearchChange,
+    onSelectPeer, onSelectGroup, onSend, onInputChange, onInputKeyDown, onSearchChange,
     onReaction, onOpenGifs, onCloseGifs, onSearchGifs, onPickGif, onSetView, onSetTheme,
+    onCreateGroup, onAcceptGroupInvite, onDeclineGroupInvite,
     messagesEndRef, textareaRef,
   };
 

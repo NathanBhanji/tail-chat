@@ -48,16 +48,35 @@ export interface ThemeInfo {
   isDefault: boolean;
 }
 
+// ─── Group chat types ───────────────────────────────────────────────
+
+export interface Group {
+  ID: string;
+  Name: string;
+  Members: string[];
+}
+
+export interface GroupInvite {
+  groupID: string;
+  groupName: string;
+  members: string[];
+  from: string;
+}
+
 export interface ThemeProps {
   // ─── Data ───────────────────────────────────────────────────
   peers: Peer[];
   selfInfo: { hostname: string; ip: string };
-  activePeer: string;
+  activePeer: string;          // hostname for DM, or '' if group selected
   activePeerData: Peer | undefined;
+  activeGroup: Group | null;   // non-null when a group is selected
+  activeChat: string;          // chatKey: hostname for DM, 'group:<id>' for group
   messages: Message[];
   typing: Record<string, boolean>;
   unread: Record<string, number>;
   connected: Record<string, boolean>;
+  groups: Group[];
+  groupInvites: GroupInvite[];
   themes: ThemeInfo[];
   activeTheme: string;
   error: string;
@@ -73,6 +92,7 @@ export interface ThemeProps {
 
   // ─── Callbacks ──────────────────────────────────────────────
   onSelectPeer: (peer: Peer) => void;
+  onSelectGroup: (group: Group) => void;
   onSend: () => void;
   onInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onInputKeyDown: (e: React.KeyboardEvent) => void;
@@ -84,6 +104,9 @@ export interface ThemeProps {
   onPickGif: (gif: GIF) => void;
   onSetView: (view: 'chat' | 'settings') => void;
   onSetTheme: (name: string) => void;
+  onCreateGroup: (name: string, members: string[]) => void;
+  onAcceptGroupInvite: (invite: GroupInvite) => void;
+  onDeclineGroupInvite: (invite: GroupInvite) => void;
 
   // ─── Refs ───────────────────────────────────────────────────
   messagesEndRef: React.RefObject<HTMLDivElement | null>;

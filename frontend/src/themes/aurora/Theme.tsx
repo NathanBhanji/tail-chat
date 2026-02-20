@@ -77,6 +77,10 @@ export default function AuroraTheme(props: ThemeProps) {
     gifLoading, view, onSelectPeer, onSend, onInputChange, onInputKeyDown, onSearchChange,
     onReaction, onOpenGifs, onCloseGifs, onSearchGifs, onPickGif, onSetView, onSetTheme,
     messagesEndRef, textareaRef,
+    // Group chat props (not yet rendered in aurora)
+    activeGroup: _activeGroup, activeChat: _activeChat, groups: _groups, groupInvites: _groupInvites,
+    onSelectGroup: _onSelectGroup, onCreateGroup: _onCreateGroup,
+    onAcceptGroupInvite: _onAcceptGroupInvite, onDeclineGroupInvite: _onDeclineGroupInvite,
   } = props;
 
   const filtered = peers.filter(p => !p.IsSelf && p.Hostname.toLowerCase().includes(searchQuery.toLowerCase()));
