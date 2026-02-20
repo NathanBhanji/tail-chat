@@ -3,6 +3,7 @@ package discovery
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os/exec"
 	"sort"
 	"strings"
@@ -12,12 +13,13 @@ import (
 
 // Peer represents a machine on the tailnet.
 type Peer struct {
-	Hostname    string `json:"hostname"`
-	DNSName     string `json:"dnsName"`
-	TailscaleIP string `json:"tailscaleIP"`
-	Online      bool   `json:"online"`
-	OS          string `json:"os"`
-	IsSelf      bool   `json:"isSelf"`
+	Hostname        string `json:"hostname"`
+	DNSName         string `json:"dnsName"`
+	TailscaleIP     string `json:"tailscaleIP"`
+	Online          bool   `json:"online"`
+	OS              string `json:"os"`
+	IsSelf          bool   `json:"isSelf"`
+	RunningTailchat bool   `json:"runningTailchat"`
 }
 
 // tailscaleStatus maps the JSON output of `tailscale status --json`.
@@ -81,8 +83,14 @@ func GetPeers() ([]Peer, error) {
 		})
 	}
 
-	// Sort: online first, then alphabetical
+	// Probe online peers for tailchat on port 9377
+	probePeers(peers)
+
+	// Sort: tailchat running first, then online, then alphabetical
 	sort.Slice(peers, func(i, j int) bool {
+		if peers[i].RunningTailchat != peers[j].RunningTailchat {
+			return peers[i].RunningTailchat
+		}
 		if peers[i].Online != peers[j].Online {
 			return peers[i].Online
 		}
@@ -90,6 +98,27 @@ func GetPeers() ([]Peer, error) {
 	})
 
 	return peers, nil
+}
+
+// probePeers checks which online peers have tailchat listening on port 9377.
+func probePeers(peers []Peer) {
+	var wg sync.WaitGroup
+	for i := range peers {
+		if !peers[i].Online {
+			continue
+		}
+		wg.Add(1)
+		go func(p *Peer) {
+			defer wg.Done()
+			addr := net.JoinHostPort(p.TailscaleIP, "9377")
+			conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+			if err == nil {
+				conn.Close()
+				p.RunningTailchat = true
+			}
+		}(&peers[i])
+	}
+	wg.Wait()
 }
 
 // Watcher periodically refreshes the peer list.
@@ -183,4 +212,13 @@ func (w *Watcher) SelfIP() string {
 // SelfHostname returns this node's hostname.
 func (w *Watcher) SelfHostname() string {
 	return w.selfHost
+}
+
+// NewTestWatcher creates a Watcher with fixed data for testing (no Tailscale needed).
+func NewTestWatcher(selfHost string, peers []Peer) *Watcher {
+	return &Watcher{
+		selfHost: selfHost,
+		peers:    peers,
+		stopCh:   make(chan struct{}),
+	}
 }

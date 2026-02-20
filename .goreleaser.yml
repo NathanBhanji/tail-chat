@@ -36,18 +36,16 @@ changelog:
       - "^test:"
       - "^ci:"
 
-# To enable automatic Homebrew formula updates, add a HOMEBREW_TAP_GITHUB_TOKEN
-# secret to this repo and uncomment the section below:
-# brews:
-#   - repository:
-#       owner: NathanBhanji
-#       name: homebrew-tap
-#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-#     directory: Formula
-#     homepage: "https://github.com/NathanBhanji/tail-chat"
-#     description: "End-to-end encrypted terminal chat over Tailscale"
-#     license: "MIT"
-#     install: |
-#       bin.install "tailchat"
-#     test: |
-#       system "#{bin}/tailchat", "--version"
+brews:
+  - repository:
+      owner: NathanBhanji
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/NathanBhanji/tail-chat"
+    description: "End-to-end encrypted terminal chat over Tailscale"
+    license: "MIT"
+    install: |
+      bin.install "tailchat"
+    test: |
+      system "#{bin}/tailchat", "--version"

@@ -59,7 +59,7 @@ func main() {
 
 	// 4. Full handshake
 	fmt.Printf("4. E2E handshake with %s... ", target)
-	peerConn, err := tcnet.Connect(addr, kp, selfHost)
+	peerConn, err := tcnet.Connect(addr, kp, selfHost, nil)
 	if err != nil {
 		fmt.Printf("FAIL: %v\n", err)
 		fmt.Println()

@@ -14,6 +14,7 @@ import (
 	"github.com/NathanBhanji/tail-chat/internal/discovery"
 	tcnet "github.com/NathanBhanji/tail-chat/internal/net"
 	"github.com/NathanBhanji/tail-chat/internal/protocol"
+	"github.com/NathanBhanji/tail-chat/internal/storage"
 )
 
 // App is the Wails bridge struct. Its public methods are callable from JavaScript.
@@ -58,8 +59,16 @@ func (a *App) domReady(ctx context.Context) {
 	a.selfIP = selfIP
 	a.selfHost = selfHost
 
+	// Load TOFU known keys
+	knownKeys, err := crypto.LoadKnownKeys()
+	if err != nil {
+		a.startupErr = fmt.Sprintf("Known keys error: %v", err)
+		runtime.EventsEmit(a.ctx, "error", a.startupErr)
+		return
+	}
+
 	listenAddr := fmt.Sprintf("%s:%d", selfIP, tcnet.DefaultPort)
-	server, err := tcnet.NewServer(listenAddr, kp, selfHost)
+	server, err := tcnet.NewServer(listenAddr, kp, selfHost, knownKeys)
 	if err != nil {
 		a.startupErr = fmt.Sprintf("Server error: %v", err)
 		runtime.EventsEmit(a.ctx, "error", a.startupErr)
@@ -68,7 +77,36 @@ func (a *App) domReady(ctx context.Context) {
 	server.Start()
 	a.server = server
 
-	a.chatMgr = chat.NewManager(server, kp, selfHost)
+	// Start peer discovery (before hostname resolver so we have peers available)
+	watcher := discovery.NewWatcher(10*time.Second, func(peers []discovery.Peer) {
+		runtime.EventsEmit(a.ctx, "peers:updated", peers)
+	})
+	if err := watcher.Start(); err != nil {
+		a.startupErr = fmt.Sprintf("Peer discovery error: %v", err)
+		runtime.EventsEmit(a.ctx, "error", a.startupErr)
+		return
+	}
+	a.peerWatcher = watcher
+
+	// Wire hostname resolver: Tailscale IP -> authenticated hostname
+	server.SetHostnameResolver(func(ip string) string {
+		for _, p := range watcher.Peers() {
+			if p.TailscaleIP == ip {
+				return p.Hostname
+			}
+		}
+		return ""
+	})
+
+	// Create persistence store
+	store, err := storage.New("")
+	if err != nil {
+		a.startupErr = fmt.Sprintf("Storage error: %v", err)
+		runtime.EventsEmit(a.ctx, "error", a.startupErr)
+		return
+	}
+
+	a.chatMgr = chat.NewManager(server, kp, selfHost, store, knownKeys)
 
 	a.chatMgr.OnMessage(func(chatKey string, msg chat.Message) {
 		runtime.EventsEmit(a.ctx, "chat:message", map[string]interface{}{
@@ -91,16 +129,6 @@ func (a *App) domReady(ctx context.Context) {
 		})
 	})
 
-	watcher := discovery.NewWatcher(10*time.Second, func(peers []discovery.Peer) {
-		runtime.EventsEmit(a.ctx, "peers:updated", peers)
-	})
-	if err := watcher.Start(); err != nil {
-		a.startupErr = fmt.Sprintf("Peer discovery error: %v", err)
-		runtime.EventsEmit(a.ctx, "error", a.startupErr)
-		return
-	}
-	a.peerWatcher = watcher
-
 	runtime.EventsEmit(a.ctx, "app:ready", map[string]string{
 		"hostname": selfHost,
 		"ip":       selfIP,
@@ -109,6 +137,9 @@ func (a *App) domReady(ctx context.Context) {
 
 // shutdown is called by Wails when the app closes.
 func (a *App) shutdown(ctx context.Context) {
+	if a.chatMgr != nil {
+		a.chatMgr.Stop()
+	}
 	if a.peerWatcher != nil {
 		a.peerWatcher.Stop()
 	}

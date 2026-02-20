@@ -14,11 +14,14 @@ const (
 )
 
 // Connect establishes an authenticated, encrypted connection to a peer.
-func Connect(addr string, kp *crypto.KeyPair, hostname string) (*Connection, error) {
+func Connect(addr string, kp *crypto.KeyPair, hostname string, knownKeys *crypto.KnownKeys) (*Connection, error) {
 	conn, err := net.DialTimeout("tcp", addr, DialTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
+
+	// Set handshake deadline
+	conn.SetDeadline(time.Now().Add(HandshakeTimeout))
 
 	// Send our handshake
 	hs := &protocol.Handshake{
@@ -56,15 +59,32 @@ func Connect(addr string, kp *crypto.KeyPair, hostname string) (*Connection, err
 		return nil, fmt.Errorf("unwrap handshake: %w", err)
 	}
 
+	// Validate public key length
+	if len(peerHS.PublicKey) != 32 {
+		conn.Close()
+		return nil, fmt.Errorf("invalid peer public key length: %d", len(peerHS.PublicKey))
+	}
+
 	// Derive shared secret
 	var peerPub [32]byte
 	copy(peerPub[:], peerHS.PublicKey)
+
+	// TOFU: verify peer's public key against known keys
+	if knownKeys != nil {
+		if err := knownKeys.Verify(peerHS.Hostname, peerPub); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("TOFU key verification failed: %w", err)
+		}
+	}
 
 	shared, err := crypto.SharedSecret(kp.PrivateKey, peerPub)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("derive shared secret: %w", err)
 	}
+
+	// Clear handshake deadline
+	conn.SetDeadline(time.Time{})
 
 	return &Connection{
 		Conn:          conn,
@@ -75,10 +95,11 @@ func Connect(addr string, kp *crypto.KeyPair, hostname string) (*Connection, err
 }
 
 // SendEncrypted encrypts and sends a chat message over a connection.
+// It is safe for concurrent use.
 func SendEncrypted(c *Connection, msgType protocol.MessageType, msg any) error {
 	env, err := protocol.Wrap(msgType, msg)
 	if err != nil {
 		return fmt.Errorf("wrap message: %w", err)
 	}
-	return protocol.WriteMessage(c.Conn, env)
+	return c.WriteMessage(env)
 }
