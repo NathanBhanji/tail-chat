@@ -54,6 +54,10 @@ export function ListThemes() {
   return window['go']['main']['App']['ListThemes']();
 }
 
+export function NotifyFrontendReady() {
+  return window['go']['main']['App']['NotifyFrontendReady']();
+}
+
 export function SearchGifs(arg1, arg2) {
   return window['go']['main']['App']['SearchGifs'](arg1, arg2);
 }
