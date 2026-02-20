@@ -56,8 +56,8 @@ export default function VaporTheme(props: ThemeProps) {
   } = props;
 
   const filtered = peers.filter(p => !p.IsSelf && p.Hostname.toLowerCase().includes(searchQuery.toLowerCase()));
-  const online = filtered.filter(p => p.Online);
-  const offline = filtered.filter(p => !p.Online);
+  const online = filtered.filter(p => p.RunningTailchat);
+  const offline = filtered.filter(p => !p.RunningTailchat);
   const allPeers = [...online, ...offline];
 
   return (
@@ -254,7 +254,7 @@ function VaporBubble({ msg, onReaction, prevMsg }: { msg: Message; onReaction: (
   const showMeta = !prevMsg || prevMsg.Sender !== msg.Sender;
 
   return (
-    <div className={`vp-msg-enter group mb-1 ${showMeta ? 'mt-4' : 'mt-0.5'}`}>
+    <div className={`vp-msg-enter group/msg mb-1 ${showMeta ? 'mt-4' : 'mt-0.5'}`}>
       {/* Sender + time label */}
       {showMeta && (
         <div className={`flex items-center gap-2 mb-1.5 ${msg.IsOwn ? 'justify-end' : 'justify-start'}`}>

@@ -82,8 +82,8 @@ export default function DefaultTheme(props: ThemeProps) {
   } = props;
 
   const filtered = peers.filter(p => !p.IsSelf && p.Hostname.toLowerCase().includes(searchQuery.toLowerCase()));
-  const online = filtered.filter(p => p.Online);
-  const offline = filtered.filter(p => !p.Online);
+  const online = filtered.filter(p => p.RunningTailchat);
+  const offline = filtered.filter(p => !p.RunningTailchat);
 
   return (
     <div className="flex h-screen w-screen" style={{ background: 'var(--color-tc-base)', fontFamily: 'var(--font-sans)' }}>
@@ -278,7 +278,7 @@ function DefaultMessageRow({ msg, onReaction }: { msg: Message; onReaction: (id:
   if (msg.Reactions) for (const r of msg.Reactions) reactions.set(r.Emoji, [...(reactions.get(r.Emoji) || []), r.Sender]);
 
   return (
-    <div className="group relative flex items-start gap-2.5 px-2 py-[3px] -mx-2 rounded-md hover:bg-tc-msg-hover transition-colors duration-100">
+    <div className="group/msg relative flex items-start gap-2.5 px-2 py-[3px] -mx-2 rounded-md hover:bg-tc-msg-hover transition-colors duration-100">
       <div className="w-[28px] shrink-0" />
       <div className="flex-1 min-w-0">
         {isGif ? (
@@ -297,7 +297,7 @@ function DefaultMessageRow({ msg, onReaction }: { msg: Message; onReaction: (id:
           </div>
         )}
       </div>
-      <div className="msg-actions absolute -top-3 right-2 flex items-center gap-0.5 bg-tc-elevated border border-tc-border rounded-md shadow-lg px-0.5 py-0.5">
+      <div className="msg-actions absolute -top-3 right-2 flex items-center gap-0.5 bg-tc-elevated border border-tc-border rounded-md shadow-lg px-0.5 py-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-100">
         {QUICK_REACTIONS.map(emoji => <button key={emoji} onClick={() => onReaction(msg.ID, emoji)} className="w-6 h-6 flex items-center justify-center rounded text-[13px] hover:bg-tc-hover transition-colors cursor-pointer" title={`React with ${emoji}`}>{emoji}</button>)}
       </div>
     </div>

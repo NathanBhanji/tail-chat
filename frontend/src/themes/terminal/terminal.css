@@ -154,7 +154,7 @@
   opacity: 0;
   transition: opacity 0.08s;
 }
-.group:hover .crt-msg-actions {
+.group\/msg:hover .crt-msg-actions {
   opacity: 1;
 }
 

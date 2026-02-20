@@ -84,7 +84,7 @@
   opacity: 0;
   transition: opacity 0.1s ease;
 }
-.group:hover .au-msg-actions {
+.group\/msg:hover .au-msg-actions {
   opacity: 1;
 }
 

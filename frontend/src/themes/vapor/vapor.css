@@ -193,7 +193,7 @@
   opacity: 0;
   transition: opacity 0.1s ease;
 }
-.group:hover .vp-reactions-bar {
+.group\/msg:hover .vp-reactions-bar {
   opacity: 1;
 }
 
