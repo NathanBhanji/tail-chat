@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link id="theme-css" rel="stylesheet" href="themes/98.css">
+  <link rel="stylesheet" href="style.css">
+  <title>TailChat</title>
+</head>
+<body>
+  <div class="window" id="app-window">
+    <div class="title-bar">
+      <div class="title-bar-text" id="title-text">TailChat</div>
+      <div class="title-bar-controls">
+        <button aria-label="Minimize"></button>
+        <button aria-label="Maximize"></button>
+        <button aria-label="Close"></button>
+      </div>
+    </div>
+
+    <div class="window-body" id="main-body">
+
+      <!-- Peer List View -->
+      <div id="view-peers" class="view">
+        <fieldset>
+          <legend>Your Identity</legend>
+          <p><strong id="self-hostname">loading...</strong> (<span id="self-ip">...</span>)</p>
+        </fieldset>
+
+        <fieldset style="margin-top: 6px;">
+          <legend>Peers (<span id="online-count">0</span> online)</legend>
+          <div class="sunken-panel" style="height: 200px; overflow-y: auto;">
+            <ul class="tree-view" id="peer-list"></ul>
+          </div>
+        </fieldset>
+
+        <fieldset id="groups-fieldset" style="margin-top: 6px; display: none;">
+          <legend>Groups</legend>
+          <div class="sunken-panel" style="max-height: 100px; overflow-y: auto;">
+            <ul class="tree-view" id="group-list"></ul>
+          </div>
+        </fieldset>
+
+        <fieldset id="invites-fieldset" style="margin-top: 6px; display: none;">
+          <legend>Pending Invites</legend>
+          <ul class="tree-view" id="invite-list"></ul>
+        </fieldset>
+
+        <div class="field-row" style="justify-content: flex-end; margin-top: 8px;">
+          <button id="btn-new-group">New Group...</button>
+          <button id="btn-refresh">Refresh</button>
+        </div>
+      </div>
+
+      <!-- Chat View -->
+      <div id="view-chat" class="view" style="display: none;">
+        <div id="chat-header">
+          <button id="btn-back">&lt; Back</button>
+          <div id="chat-header-info">
+            <strong id="chat-title"></strong>
+            <span id="chat-encryption">&#128274; e2e encrypted</span>
+          </div>
+        </div>
+
+        <div class="sunken-panel" id="message-panel"></div>
+
+        <div id="chat-input-bar">
+          <input type="text" id="message-input" placeholder="Type a message...">
+          <button id="btn-send">Send</button>
+        </div>
+      </div>
+
+      <!-- Group Create View -->
+      <div id="view-group-create" class="view" style="display: none;">
+        <div class="window" style="width: 300px; margin: 20px auto;">
+          <div class="title-bar">
+            <div class="title-bar-text">New Group</div>
+          </div>
+          <div class="window-body">
+            <div class="field-row-stacked">
+              <label for="group-name">Group Name:</label>
+              <input id="group-name" type="text">
+            </div>
+            <fieldset style="margin-top: 6px;">
+              <legend>Members</legend>
+              <div class="sunken-panel" style="max-height: 100px; overflow-y: auto;">
+                <ul class="tree-view" id="group-members-list"></ul>
+              </div>
+              <div class="field-row" style="margin-top: 4px;">
+                <input id="group-member-input" type="text" placeholder="hostname" style="flex: 1;">
+                <button id="btn-add-member">Add</button>
+              </div>
+            </fieldset>
+            <div class="field-row" style="justify-content: flex-end; margin-top: 8px;">
+              <button id="btn-create-group">Create</button>
+              <button id="btn-cancel-group">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Connecting Overlay -->
+      <div id="connecting-overlay" class="view" style="display: none;">
+        <div style="text-align: center; padding: 40px 20px;">
+          <p id="connecting-text">Connecting to peer...</p>
+          <div class="progress-indicator segmented" style="width: 200px; margin: 12px auto;">
+            <div class="progress-indicator-bar" id="connecting-progress"></div>
+          </div>
+          <button id="btn-cancel-connect">Cancel</button>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="status-bar">
+      <p class="status-bar-field" id="status-connection">Connected to Tailnet</p>
+      <p class="status-bar-field">&#128274; e2e encrypted</p>
+      <p class="status-bar-field" id="status-peers">0 peers</p>
+      <p class="status-bar-field">
+        <select id="theme-select" style="height: 18px; min-width: 0; width: 100%; border: none; background: silver; font-size: 11px;">
+          <option value="98">Win 98</option>
+          <option value="xp">Win XP</option>
+          <option value="7">Win 7</option>
+        </select>
+      </p>
+    </div>
+  </div>
+
+  <!-- Error Dialog -->
+  <div id="error-dialog" style="display: none;">
+    <div class="window" id="error-window">
+      <div class="title-bar">
+        <div class="title-bar-text">Error</div>
+        <div class="title-bar-controls">
+          <button aria-label="Close" id="error-close-x"></button>
+        </div>
+      </div>
+      <div class="window-body">
+        <div class="field-row" style="align-items: flex-start;">
+          <span style="font-size: 32px; margin-right: 12px;">&#9888;</span>
+          <p id="error-text" style="margin: 4px 0;"></p>
+        </div>
+        <div class="field-row" style="justify-content: center; margin-top: 12px;">
+          <button id="error-ok" style="min-width: 80px;">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="wailsjs/runtime/runtime.js"></script>
+  <script src="wailsjs/go/main/App.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

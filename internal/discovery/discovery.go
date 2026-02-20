@@ -13,13 +13,13 @@ import (
 
 // Peer represents a machine on the tailnet.
 type Peer struct {
-	Hostname        string
-	DNSName         string
-	TailscaleIP     string
-	Online          bool
-	OS              string
-	IsSelf          bool
-	RunningTailchat bool // true if tailchat is listening on port 9377
+	Hostname        string `json:"hostname"`
+	DNSName         string `json:"dnsName"`
+	TailscaleIP     string `json:"tailscaleIP"`
+	Online          bool   `json:"online"`
+	OS              string `json:"os"`
+	IsSelf          bool   `json:"isSelf"`
+	RunningTailchat bool   `json:"runningTailchat"`
 }
 
 // tailscaleStatus maps the JSON output of `tailscale status --json`.

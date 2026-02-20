@@ -56,22 +56,22 @@ type Reaction struct {
 
 // Message is a decrypted chat message ready for display.
 type Message struct {
-	ID        string
-	Sender    string
-	Content   string
-	Timestamp time.Time
-	IsOwn     bool
-	GroupID   string
-	State     DeliveryState
-	Reactions []Reaction
-	FileInfo  *FileInfo
+	ID        string        `json:"id"`
+	Sender    string        `json:"sender"`
+	Content   string        `json:"content"`
+	Timestamp time.Time     `json:"timestamp"`
+	IsOwn     bool          `json:"isOwn"`
+	GroupID   string        `json:"groupID"`
+	State     DeliveryState `json:"state"`
+	Reactions []Reaction    `json:"reactions"`
+	FileInfo  *FileInfo     `json:"fileInfo,omitempty"`
 }
 
 // Group represents a group chat.
 type Group struct {
-	ID      string
-	Name    string
-	Members []string
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Members []string `json:"members"`
 }
 
 // fileChunkSize is the raw bytes per FileData chunk (64KB).
