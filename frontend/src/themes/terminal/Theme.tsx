@@ -27,8 +27,8 @@ export default function TerminalTheme(props: ThemeProps) {
   const [showPeers, setShowPeers] = useState(true);
 
   const filtered = peers.filter(p => !p.IsSelf);
-  const online = filtered.filter(p => p.Online);
-  const offline = filtered.filter(p => !p.Online);
+  const online = filtered.filter(p => p.RunningTailchat);
+  const offline = filtered.filter(p => !p.RunningTailchat);
 
   return (
     <div className="crt-root crt-screen flex flex-col h-screen w-screen">
@@ -170,7 +170,7 @@ function TerminalLogLine({ msg, onReaction }: { msg: Message; onReaction: (id: s
   const status = msg.IsOwn ? (msg.State === 2 ? ' ✓✓' : msg.State === 1 ? ' ✓' : ' ...') : '';
 
   return (
-    <div className="group crt-log-line relative leading-relaxed py-[1px]">
+    <div className="group/msg crt-log-line relative leading-relaxed py-[1px]">
       <span className="crt-text-dim">[{time}]</span>{' '}
       <span className={msg.IsOwn ? 'crt-text-bright' : 'crt-text'}>&lt;{sender}&gt;</span>{' '}
       {isGif ? (

@@ -80,8 +80,8 @@ export default function AuroraTheme(props: ThemeProps) {
   } = props;
 
   const filtered = peers.filter(p => !p.IsSelf && p.Hostname.toLowerCase().includes(searchQuery.toLowerCase()));
-  const online = filtered.filter(p => p.Online);
-  const offline = filtered.filter(p => !p.Online);
+  const online = filtered.filter(p => p.RunningTailchat);
+  const offline = filtered.filter(p => !p.RunningTailchat);
 
   return (
     <div className="au-root flex h-screen w-screen">
@@ -279,7 +279,7 @@ function AuroraMessageRow({ msg, onReaction }: { msg: Message; onReaction: (id: 
   if (msg.Reactions) for (const r of msg.Reactions) reactions.set(r.Emoji, [...(reactions.get(r.Emoji) || []), r.Sender]);
 
   return (
-    <div className="group relative flex items-start gap-2.5 px-2 py-[3px] -mx-2 rounded-lg hover:bg-white/[0.02] transition-colors duration-100">
+    <div className="group/msg relative flex items-start gap-2.5 px-2 py-[3px] -mx-2 rounded-lg hover:bg-white/[0.02] transition-colors duration-100">
       <div className="w-[28px] shrink-0" />
       <div className="flex-1 min-w-0">
         {isGif ? (

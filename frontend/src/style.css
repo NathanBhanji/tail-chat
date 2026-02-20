@@ -158,11 +158,4 @@ input, button, textarea, select, a, [contenteditable] { --wails-draggable: no-dr
 }
 
 /* ─── Message hover action bar ─── */
-
-.msg-actions {
-  opacity: 0;
-  transition: opacity 0.1s ease;
-}
-.msg-row:hover .msg-actions {
-  opacity: 1;
-}
+/* Handled by Tailwind group-hover on individual message rows */
