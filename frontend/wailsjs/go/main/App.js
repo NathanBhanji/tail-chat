@@ -46,6 +46,10 @@ export function IsConnected(arg1) {
   return window['go']['main']['App']['IsConnected'](arg1);
 }
 
+export function IsReady() {
+  return window['go']['main']['App']['IsReady']();
+}
+
 export function ListThemes() {
   return window['go']['main']['App']['ListThemes']();
 }

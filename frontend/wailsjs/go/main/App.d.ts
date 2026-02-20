@@ -27,6 +27,8 @@ export function GetUnread(arg1:string):Promise<number>;
 
 export function IsConnected(arg1:string):Promise<boolean>;
 
+export function IsReady():Promise<boolean>;
+
 export function ListThemes():Promise<Array<config.ThemeInfo>>;
 
 export function SearchGifs(arg1:string,arg2:number):Promise<Array<tenor.GIF>>;

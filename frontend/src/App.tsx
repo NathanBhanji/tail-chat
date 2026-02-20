@@ -49,6 +49,7 @@ const GetUnread = api<(k: string) => Promise<number>>('GetUnread');
 const ClearUnread = api<(k: string) => Promise<void>>('ClearUnread');
 const SearchGifs = api<(q: string, l: number) => Promise<GIF[]>>('SearchGifs');
 const TrendingGifs = api<(l: number) => Promise<GIF[]>>('TrendingGifs');
+const IsReady = api<() => Promise<boolean>>('IsReady');
 const _ListThemes = api<() => Promise<ThemeInfo[]>>('ListThemes');
 const _GetActiveTheme = api<() => Promise<string>>('GetActiveTheme');
 const _SetTheme = api<(n: string) => Promise<void>>('SetTheme');
@@ -92,49 +93,6 @@ export default function App() {
   const gifSearchRef = useRef<number | null>(null);
   const typingRef = useRef<number | null>(null);
 
-  // ─── Backend events ─────────────────────────────────────────────
-
-  useEffect(() => {
-    backendReady.then(() => {
-      EventsOn('ready', () => {
-        setReady(true);
-        GetSelfInfo().then(info => setSelfInfo({ hostname: info?.['hostname'] || '', ip: info?.['ip'] || '' }));
-        refreshPeers();
-        // Load saved theme preference
-        _GetActiveTheme().then(t => { if (t && THEME_COMPONENTS[t]) setActiveTheme(t); });
-      });
-      EventsOn('error', (msg: string) => setError(msg));
-      EventsOn('peers:updated', (p: Peer[]) => setPeers(p || []));
-      EventsOn('chat:message', (d: { chatKey: string }) => {
-        if (d.chatKey === activePeer) refreshMessages(activePeer);
-        refreshUnread(d.chatKey);
-      });
-      EventsOn('chat:typing', (d: { chatKey: string; isTyping: boolean }) => {
-        setTyping(prev => ({ ...prev, [d.chatKey]: d.isTyping }));
-      });
-      EventsOn('chat:peerConnect', () => refreshPeers());
-      EventsOn('chat:reaction', (d: { chatKey: string }) => {
-        if (d.chatKey === activePeer) refreshMessages(activePeer);
-      });
-      EventsOn('chat:status', () => refreshPeers());
-    });
-  }, [activePeer]);
-
-  useEffect(() => {
-    if (!ready) return;
-    const id = setInterval(() => {
-      refreshPeers();
-      if (activePeer) refreshMessages(activePeer);
-    }, 3000);
-    return () => clearInterval(id);
-  }, [ready, activePeer]);
-
-  useEffect(() => {
-    if (view === 'settings') {
-      _ListThemes().then(setThemes);
-    }
-  }, [view]);
-
   // ─── Data fetching ──────────────────────────────────────────────
 
   const refreshPeers = useCallback(async () => {
@@ -158,6 +116,69 @@ export default function App() {
   const refreshUnread = useCallback(async (key: string) => {
     try { GetUnread(key).then(c => setUnread(prev => ({ ...prev, [key]: c }))); } catch { /* */ }
   }, []);
+
+  // ─── Backend events ─────────────────────────────────────────────
+
+  // Shared handler for when the backend is ready — called by either
+  // the "ready" event OR the IsReady() poll (whichever fires first).
+  const handleReady = useCallback(() => {
+    setReady(true);
+    GetSelfInfo().then(info => setSelfInfo({ hostname: info?.['hostname'] || '', ip: info?.['ip'] || '' }));
+    refreshPeers();
+    _GetActiveTheme().then(t => { if (t && THEME_COMPONENTS[t]) setActiveTheme(t); });
+  }, [refreshPeers]);
+
+  useEffect(() => {
+    let pollId: number | undefined;
+
+    backendReady.then(() => {
+      // Listen for the event (covers case where backend finishes after JS loads)
+      EventsOn('ready', handleReady);
+      EventsOn('error', (msg: string) => setError(msg));
+      EventsOn('peers:updated', (p: Peer[]) => setPeers(p || []));
+      EventsOn('chat:message', (d: { chatKey: string }) => {
+        if (d.chatKey === activePeer) refreshMessages(activePeer);
+        refreshUnread(d.chatKey);
+      });
+      EventsOn('chat:typing', (d: { chatKey: string; isTyping: boolean }) => {
+        setTyping(prev => ({ ...prev, [d.chatKey]: d.isTyping }));
+      });
+      EventsOn('chat:peerConnect', () => refreshPeers());
+      EventsOn('chat:reaction', (d: { chatKey: string }) => {
+        if (d.chatKey === activePeer) refreshMessages(activePeer);
+      });
+      EventsOn('chat:status', () => refreshPeers());
+
+      // Poll IsReady() to catch the case where "ready" fired before
+      // the JS event listener was registered (race condition on startup).
+      pollId = window.setInterval(async () => {
+        try {
+          const ok = await IsReady();
+          if (ok) {
+            clearInterval(pollId);
+            handleReady();
+          }
+        } catch { /* backend not available yet */ }
+      }, 500);
+    });
+
+    return () => { if (pollId) clearInterval(pollId); };
+  }, [activePeer, handleReady]);
+
+  useEffect(() => {
+    if (!ready) return;
+    const id = setInterval(() => {
+      refreshPeers();
+      if (activePeer) refreshMessages(activePeer);
+    }, 3000);
+    return () => clearInterval(id);
+  }, [ready, activePeer]);
+
+  useEffect(() => {
+    if (view === 'settings') {
+      _ListThemes().then(setThemes);
+    }
+  }, [view]);
 
   // ─── Callbacks (passed to theme) ────────────────────────────────
 
@@ -242,9 +263,15 @@ export default function App() {
   const onSetView = useCallback((v: 'chat' | 'settings') => setView(v), []);
   const onSearchChange = useCallback((q: string) => setSearchQuery(q), []);
 
-  // Auto-scroll
+  // Auto-scroll only when new messages arrive (not on poll refreshes).
+  // Track previous count so polling the same messages doesn't yank
+  // the user back to the bottom while they're reading history.
+  const prevMsgCountRef = useRef(0);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messages.length > prevMsgCountRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevMsgCountRef.current = messages.length;
   }, [messages]);
 
   // ─── Loading state (theme-agnostic) ─────────────────────────────
