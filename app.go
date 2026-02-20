@@ -157,11 +157,6 @@ func (a *App) initBackend() error {
 		})
 	})
 
-	wailsRuntime.EventsEmit(a.ctx, "ready", map[string]interface{}{
-		"hostname": selfHost,
-		"ip":       selfIP,
-	})
-
 	return nil
 }
 
@@ -173,6 +168,12 @@ func (a *App) GetPeers() []discovery.Peer {
 		return nil
 	}
 	return a.watcher.Peers()
+}
+
+// IsReady returns whether the backend has finished initialising.
+// The frontend polls this on mount to avoid missing the one-shot "ready" event.
+func (a *App) IsReady() bool {
+	return a.ready.Load()
 }
 
 // GetSelfInfo returns hostname and IP for the local node.

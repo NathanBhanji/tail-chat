@@ -97,6 +97,7 @@ export async function SendTyping(_key: string, _typing: boolean) {}
 export async function SendReaction(_key: string, _msgID: string, _emoji: string) {}
 export async function SendReadReceipts(_key: string) {}
 export async function ConnectToPeer(_ip: string) {}
+export async function IsReady() { return true; }
 export async function IsConnected(_hostname: string) { return true; }
 export async function GetUnread(key: string) { return key === 'bob-desktop' ? 2 : 0; }
 export async function ClearUnread(_key: string) {}
