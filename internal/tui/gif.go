@@ -19,7 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/image/draw"
 
-	"github.com/NathanBhanji/tail-chat/internal/giphy"
+	"github.com/NathanBhanji/tail-chat/internal/tenor"
 )
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -35,9 +35,9 @@ const (
 
 // ─── Tea message types ──────────────────────────────────────────────
 
-// GifSearchResultMsg is sent when Giphy search results arrive.
+// GifSearchResultMsg is sent when Tenor search results arrive.
 type GifSearchResultMsg struct {
-	Results []giphy.GIF
+	Results []tenor.GIF
 	Err     error
 }
 
@@ -58,7 +58,7 @@ type ImageCachedMsg struct {
 
 type gifPicker struct {
 	query   string
-	results []giphy.GIF
+	results []tenor.GIF
 	thumbs  map[int]image.Image
 	cursor  int
 	loading bool
@@ -71,10 +71,10 @@ func (g *gifPicker) selectedSendURL() string {
 		return ""
 	}
 	gif := g.results[g.cursor]
-	if gif.Images.FixedHeight.URL != "" {
-		return gif.Images.FixedHeight.URL
+	if gif.Media.GIF.URL != "" {
+		return gif.Media.GIF.URL
 	}
-	return gif.Images.Original.URL
+	return gif.Media.TinyGIF.URL
 }
 
 // thumbURL returns the URL for downloading a picker thumbnail.
@@ -83,13 +83,13 @@ func (g *gifPicker) thumbURL(i int) string {
 		return ""
 	}
 	gif := g.results[i]
-	if gif.Images.FixedHeightStill.URL != "" {
-		return gif.Images.FixedHeightStill.URL
+	if gif.Media.TinyGIF.URL != "" {
+		return gif.Media.TinyGIF.URL
 	}
-	if gif.Images.FixedWidthSmall.URL != "" {
-		return gif.Images.FixedWidthSmall.URL
+	if gif.Media.NanoGIF.URL != "" {
+		return gif.Media.NanoGIF.URL
 	}
-	return gif.Images.FixedHeight.URL
+	return gif.Media.GIF.URL
 }
 
 // ─── Image cache ────────────────────────────────────────────────────
@@ -344,11 +344,11 @@ func renderThumb(img image.Image, cellW, maxRows int) ([]string, int) {
 
 // ─── Tea commands ───────────────────────────────────────────────────
 
-var giphyClient = giphy.New()
+var tenorClient = tenor.New()
 
 func gifSearchCmd(query string) tea.Cmd {
 	return func() tea.Msg {
-		results, err := giphyClient.Search(query, 9)
+		results, err := tenorClient.Search(query, 9)
 		return GifSearchResultMsg{Results: results, Err: err}
 	}
 }
@@ -518,7 +518,7 @@ func (m Model) renderGifPicker(width int) string {
 
 	if gp.loading {
 		b.WriteString("\n")
-		b.WriteString(connectingStyle.Render("  Searching Giphy..."))
+		b.WriteString(connectingStyle.Render("  Searching Tenor..."))
 		b.WriteString("\n")
 		linesUsed += 2
 	} else if gp.err != "" {
