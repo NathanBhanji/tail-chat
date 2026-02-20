@@ -50,6 +50,7 @@ const ClearUnread = api<(k: string) => Promise<void>>('ClearUnread');
 const SearchGifs = api<(q: string, l: number) => Promise<GIF[]>>('SearchGifs');
 const TrendingGifs = api<(l: number) => Promise<GIF[]>>('TrendingGifs');
 const IsReady = api<() => Promise<boolean>>('IsReady');
+const NotifyFrontendReady = api<() => Promise<void>>('NotifyFrontendReady');
 const _ListThemes = api<() => Promise<ThemeInfo[]>>('ListThemes');
 const _GetActiveTheme = api<() => Promise<string>>('GetActiveTheme');
 const _SetTheme = api<(n: string) => Promise<void>>('SetTheme');
@@ -149,20 +150,10 @@ export default function App() {
       });
       EventsOn('chat:status', () => refreshPeers());
 
-      // Poll IsReady() to catch the case where "ready" fired before
-      // the JS event listener was registered (race condition on startup).
-      pollId = window.setInterval(async () => {
-        try {
-          const ok = await IsReady();
-          if (ok) {
-            clearInterval(pollId);
-            handleReady();
-          }
-        } catch { /* backend not available yet */ }
-      }, 500);
+      // Tell the Go backend all listeners are registered.
+      // The backend waits for this before emitting "ready".
+      NotifyFrontendReady();
     });
-
-    return () => { if (pollId) clearInterval(pollId); };
   }, [activePeer, handleReady]);
 
   useEffect(() => {

@@ -28,20 +28,24 @@ type App struct {
 	server  *tcnet.Server
 	tenor   *tenor.Client
 
-	selfHost string
-	selfIP   string
-	ready    atomic.Bool
+	selfHost   string
+	selfIP     string
+	ready      atomic.Bool
+	initErr    error
+	frontendUp chan struct{} // closed when frontend calls NotifyFrontendReady
 }
 
 // NewApp creates a new App instance.
 func NewApp() *App {
 	return &App{
-		tenor: tenor.New(),
+		tenor:      tenor.New(),
+		frontendUp: make(chan struct{}),
 	}
 }
 
 // startup is called by Wails when the application starts.
-// We initialise the entire backend here.
+// We start the backend init early but don't emit events yet —
+// the webview DOM may not be ready to receive them.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
@@ -49,13 +53,31 @@ func (a *App) startup(ctx context.Context) {
 		log.Println("[tailchat] starting backend init...")
 		if err := a.initBackend(); err != nil {
 			log.Printf("[tailchat] backend init failed: %v", err)
+			a.initErr = err
+			// Wait for frontend before emitting error
+			<-a.frontendUp
 			wailsRuntime.EventsEmit(a.ctx, "error", err.Error())
 			return
 		}
 		log.Println("[tailchat] backend ready")
 		a.ready.Store(true)
+		// Wait until the frontend has registered its event listeners
+		<-a.frontendUp
+		log.Println("[tailchat] frontend ready, emitting ready event")
 		wailsRuntime.EventsEmit(a.ctx, "ready", true)
 	}()
+}
+
+// NotifyFrontendReady is called by the frontend JS once it has
+// registered all event listeners. This handshake guarantees the
+// "ready" event is never emitted before the frontend can receive it.
+func (a *App) NotifyFrontendReady() {
+	select {
+	case <-a.frontendUp:
+		// already closed
+	default:
+		close(a.frontendUp)
+	}
 }
 
 // shutdown is called by Wails when the application is closing.

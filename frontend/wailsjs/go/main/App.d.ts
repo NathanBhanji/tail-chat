@@ -31,6 +31,8 @@ export function IsReady():Promise<boolean>;
 
 export function ListThemes():Promise<Array<config.ThemeInfo>>;
 
+export function NotifyFrontendReady():Promise<void>;
+
 export function SearchGifs(arg1:string,arg2:number):Promise<Array<tenor.GIF>>;
 
 export function SearchMessages(arg1:string):Promise<Record<string, Array<chat.Message>>>;

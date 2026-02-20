@@ -71,7 +71,8 @@ function emit(event: string, ...args: any[]) {
   for (const fn of (listeners[event] || [])) fn(...args);
 }
 
-// Fire ready after a delay — long enough for React to mount and register listeners
+// In shim mode, ready is fired when NotifyFrontendReady is called (see below).
+// Fallback: also fire after a delay in case NotifyFrontendReady isn't called.
 if (!IS_WAILS) {
   setTimeout(() => emit('ready', true), 800);
 }
@@ -98,6 +99,7 @@ export async function SendReaction(_key: string, _msgID: string, _emoji: string)
 export async function SendReadReceipts(_key: string) {}
 export async function ConnectToPeer(_ip: string) {}
 export async function IsReady() { return true; }
+export async function NotifyFrontendReady() { emit('ready', true); }
 export async function IsConnected(_hostname: string) { return true; }
 export async function GetUnread(key: string) { return key === 'bob-desktop' ? 2 : 0; }
 export async function ClearUnread(_key: string) {}

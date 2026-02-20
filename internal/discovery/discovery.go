@@ -3,6 +3,7 @@ package discovery
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
 	"sort"
@@ -39,17 +40,20 @@ type tailscalePeer struct {
 
 // tailscaleBin returns the path to the tailscale CLI binary.
 // On macOS, GUI apps don't inherit the shell PATH, so we check
-// common locations explicitly.
+// common locations explicitly. The CLI wrapper scripts must be
+// preferred over the .app binary — the latter outputs a GUI error
+// when called as a subprocess of another GUI app.
 func tailscaleBin() string {
 	// Try PATH first (works from terminal)
 	if p, err := exec.LookPath("tailscale"); err == nil {
 		return p
 	}
-	// macOS app bundle location
+	// CLI wrapper/symlink locations (preferred — these always behave as CLI)
+	// The .app binary is last resort — it may fail in GUI subprocess contexts.
 	candidates := []string{
-		"/Applications/Tailscale.app/Contents/MacOS/Tailscale",
 		"/usr/local/bin/tailscale",
 		"/opt/homebrew/bin/tailscale",
+		"/Applications/Tailscale.app/Contents/MacOS/Tailscale",
 	}
 	for _, c := range candidates {
 		if _, err := exec.LookPath(c); err == nil {
@@ -61,9 +65,16 @@ func tailscaleBin() string {
 
 // GetSelfIP returns this machine's Tailscale IP.
 func GetSelfIP() (string, string, error) {
-	out, err := exec.Command(tailscaleBin(), "status", "--json").Output()
+	bin := tailscaleBin()
+	log.Printf("[tailchat] using tailscale binary: %s", bin)
+	out, err := exec.Command(bin, "status", "--json").CombinedOutput()
 	if err != nil {
+		log.Printf("[tailchat] tailscale status failed: %v — output: %s", err, string(out[:min(200, len(out))]))
 		return "", "", fmt.Errorf("tailscale status: %w", err)
+	}
+	if len(out) > 0 && out[0] != '{' {
+		log.Printf("[tailchat] tailscale returned non-JSON: %s", string(out[:min(200, len(out))]))
+		return "", "", fmt.Errorf("tailscale returned non-JSON output (binary may not support CLI mode)")
 	}
 
 	var status tailscaleStatus
