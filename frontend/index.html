@@ -54,16 +54,18 @@
 
       <!-- Chat View -->
       <div id="view-chat" class="view" style="display: none;">
-        <div class="field-row" style="justify-content: space-between; margin-bottom: 4px;">
+        <div id="chat-header">
           <button id="btn-back">&lt; Back</button>
-          <strong id="chat-title"></strong>
-          <span style="color: green; font-size: 10px;">&#128274; e2e encrypted</span>
+          <div id="chat-header-info">
+            <strong id="chat-title"></strong>
+            <span id="chat-encryption">&#128274; e2e encrypted</span>
+          </div>
         </div>
 
         <div class="sunken-panel" id="message-panel"></div>
 
-        <div class="field-row" style="margin-top: 4px;">
-          <input type="text" id="message-input" style="flex: 1;" placeholder="Type a message...">
+        <div id="chat-input-bar">
+          <input type="text" id="message-input" placeholder="Type a message...">
           <button id="btn-send">Send</button>
         </div>
       </div>

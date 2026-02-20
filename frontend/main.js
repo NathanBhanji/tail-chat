@@ -197,6 +197,12 @@ async function openChat(chatKey) {
   scrollToBottom();
 }
 
+function shortName(hostname) {
+  // "nathanbhanji-MacBook-Pro" -> "nathanbhanji"
+  var idx = hostname.indexOf("-");
+  return idx > 0 ? hostname.substring(0, idx) : hostname;
+}
+
 function appendMessage(msg) {
   var panel = document.getElementById("message-panel");
   var div = document.createElement("div");
@@ -210,21 +216,25 @@ function appendMessage(msg) {
     time = "??:??";
   }
 
-  var timeSpan = document.createElement("span");
-  timeSpan.className = "msg-time";
-  timeSpan.textContent = "[" + time + "] ";
+  var header = document.createElement("div");
+  header.className = "msg-header";
 
   var senderSpan = document.createElement("span");
   senderSpan.className = "msg-sender";
-  senderSpan.textContent = msg.sender + ": ";
+  senderSpan.textContent = msg.isOwn ? "You" : shortName(msg.sender);
+  header.appendChild(senderSpan);
 
-  var contentSpan = document.createElement("span");
-  contentSpan.className = "msg-content";
-  contentSpan.textContent = msg.content;
+  var timeSpan = document.createElement("span");
+  timeSpan.className = "msg-time";
+  timeSpan.textContent = time;
+  header.appendChild(timeSpan);
 
-  div.appendChild(timeSpan);
-  div.appendChild(senderSpan);
-  div.appendChild(contentSpan);
+  var contentDiv = document.createElement("div");
+  contentDiv.className = "msg-content";
+  contentDiv.textContent = msg.content;
+
+  div.appendChild(header);
+  div.appendChild(contentDiv);
   panel.appendChild(div);
 
   scrollToBottom();
