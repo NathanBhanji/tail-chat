@@ -184,4 +184,10 @@ var (
 	activeChatStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(secondary)
+
+	// GIF picker selected cell
+	gifPickerSelected = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(text).
+				Background(primary)
 )

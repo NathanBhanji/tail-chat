@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"image"
 	"sort"
 	"strings"
 	"time"
@@ -31,7 +32,8 @@ const (
 	ViewChat View = iota
 	ViewGroupCreate
 	ViewSearch
-	ViewEmpty // no chat selected yet
+	ViewEmpty     // no chat selected yet
+	ViewGifPicker // GIF search & pick
 )
 
 // IncomingMsg is sent when a new chat message arrives.
@@ -158,6 +160,9 @@ type Model struct {
 	lastKey     string
 	lastKeyTime time.Time
 
+	// GIF picker
+	gifPicker gifPicker
+
 	// Components
 	input textinput.Model
 }
@@ -176,6 +181,7 @@ func NewModel(chatMgr *chat.Manager, watcher *discovery.Watcher) Model {
 		view:        ViewEmpty,
 		peers:       watcher.Peers(),
 		input:       ti,
+		gifPicker:   gifPicker{thumbs: make(map[int]image.Image)},
 	}
 }
 
@@ -202,11 +208,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case IncomingMsg:
+		var cmds []tea.Cmd
 		if msg.ChatKey == m.activeChatKey {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
-			return m, nil
+		} else {
+			cmds = append(cmds, notifyCmd(msg.Message.Sender, msg.Message.Content))
 		}
-		return m, notifyCmd(msg.Message.Sender, msg.Message.Content)
+		// Auto-download image for inline rendering
+		if w := strings.Fields(strings.TrimSpace(msg.Message.Content)); len(w) == 1 && isImageURL(w[0]) && !isImageCached(w[0]) {
+			cmds = append(cmds, cacheImageCmd(w[0]))
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
+		}
+		return m, nil
 
 	case PeerConnectMsg:
 		return m, nil
@@ -266,6 +281,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StatusUpdatedMsg:
 		return m, nil
 
+	case GifSearchResultMsg:
+		if msg.Err != nil {
+			m.gifPicker.err = msg.Err.Error()
+			m.gifPicker.loading = false
+			return m, nil
+		}
+		m.gifPicker.results = msg.Results
+		m.gifPicker.loading = false
+		m.gifPicker.cursor = 0
+		return m, gifLoadThumbsCmd(&m.gifPicker)
+
+	case GifThumbLoadedMsg:
+		if msg.Err == nil && msg.Img != nil {
+			m.gifPicker.thumbs[msg.Index] = msg.Img
+		}
+		return m, nil
+
+	case ImageCachedMsg:
+		return m, nil
+
 	case ErrorMsg:
 		m.err = msg.Err.Error()
 		m.errExpiry = time.Now().Add(5 * time.Second)
@@ -283,7 +318,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.activeChatKey != "" {
 			m.messages = m.chatMgr.GetMessages(m.activeChatKey)
 		}
-		return m, tickCmd()
+		// Auto-download images for inline rendering
+		cmds := []tea.Cmd{tickCmd()}
+		for _, msg := range m.messages {
+			if w := strings.Fields(strings.TrimSpace(msg.Content)); len(w) == 1 && isImageURL(w[0]) && !isImageCached(w[0]) {
+				cmds = append(cmds, cacheImageCmd(w[0]))
+			}
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	var cmd tea.Cmd
@@ -361,7 +403,7 @@ func (m Model) openChat(chatKey string) Model {
 	m.scrollOffset = 0
 	m.emojiCompletions = nil
 	m.emojiCompIdx = 0
-	m.input.Placeholder = "Type a message... (:emoji: tab \u2022 /file path)"
+	m.input.Placeholder = "Type a message... (:emoji: tab \u2022 /file /gif)"
 	m.input.SetValue("")
 	m.input.Focus()
 	return m
@@ -378,7 +420,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key == "tab" && m.focusPane == PaneChat && len(m.emojiCompletions) > 0 {
 		return m.handleEmojiCompletion()
 	}
-	if key == "tab" && m.view != ViewGroupCreate && m.view != ViewSearch {
+	if key == "tab" && m.view != ViewGroupCreate && m.view != ViewSearch && m.view != ViewGifPicker {
 		if m.focusPane == PaneSidebar && m.activeChatKey != "" {
 			m.focusPane = PaneChat
 			m.input.Focus()
@@ -401,6 +443,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleGroupCreateKeys(msg)
 	case ViewSearch:
 		return m.handleSearchKeys(msg)
+	case ViewGifPicker:
+		return m.handleGifPickerKeys(msg)
 	}
 
 	return m, nil
@@ -604,6 +648,24 @@ func (m Model) handleChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.emojiCompIdx = 0
 		m.scrollOffset = 0
 		m.chatMgr.SendTyping(m.activeChatKey, false)
+
+		// Handle /gif command
+		if strings.HasPrefix(content, "/gif ") || content == "/gif" {
+			query := strings.TrimSpace(strings.TrimPrefix(content, "/gif"))
+			if query == "" {
+				query = "trending"
+			}
+			m.gifPicker = gifPicker{
+				query:   query,
+				loading: true,
+				thumbs:  make(map[int]image.Image),
+			}
+			m.view = ViewGifPicker
+			m.focusPane = PaneChat
+			m.input.SetValue("")
+			m.input.Placeholder = "Search GIFs..."
+			return m, gifSearchCmd(query)
+		}
 
 		// Handle /file command
 		if strings.HasPrefix(content, "/file ") {
@@ -909,6 +971,8 @@ func (m Model) View() string {
 		rightPane = m.renderGroupCreate(chatWidth)
 	case ViewSearch:
 		rightPane = m.renderSearch(chatWidth)
+	case ViewGifPicker:
+		rightPane = m.renderGifPicker(chatWidth)
 	default:
 		rightPane = m.renderEmpty(chatWidth)
 	}
@@ -1127,6 +1191,10 @@ func (m Model) renderChat(width int) string {
 			wrapped := lipgloss.NewStyle().Width(maxContentW).Render(msg.Content)
 			lines = strings.Count(wrapped, "\n") + 1
 		}
+		// Inline image lines
+		if w := strings.Fields(strings.TrimSpace(msg.Content)); len(w) == 1 && isImageURL(w[0]) {
+			lines += inlineImageLines(w[0], maxContentW, gifInlineMaxRows)
+		}
 		if len(msg.Reactions) > 0 {
 			lines++
 		}
@@ -1191,6 +1259,13 @@ func (m Model) renderChat(width int) string {
 			b.WriteString(fmt.Sprintf(" %s %s: %s%s\n", ts, sender, rendered, tick))
 		}
 
+		// Inline image rendering
+		if w := strings.Fields(strings.TrimSpace(msg.Content)); len(w) == 1 && isImageURL(w[0]) {
+			if imgStr, _ := renderInlineImage(w[0], maxContentW, gifInlineMaxRows); imgStr != "" {
+				b.WriteString(imgStr)
+			}
+		}
+
 		if len(msg.Reactions) > 0 {
 			b.WriteString(fmt.Sprintf("%s%s\n", strings.Repeat(" ", 8), renderReactions(msg.Reactions)))
 		}
@@ -1248,7 +1323,7 @@ func (m Model) renderChat(width int) string {
 	b.WriteString("\n")
 
 	// Help
-	b.WriteString(helpStyle.Render(" enter send \u2022 /react /file \u2022 esc \u2190"))
+	b.WriteString(helpStyle.Render(" enter send \u2022 /react /file /gif \u2022 esc \u2190"))
 
 	return chatPane.Width(innerW).Height(h).Render(b.String())
 }

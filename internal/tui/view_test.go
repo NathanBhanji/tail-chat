@@ -2,6 +2,9 @@ package tui
 
 import (
 	"bytes"
+	"image"
+	"image/color"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"github.com/NathanBhanji/tail-chat/internal/chat"
 	"github.com/NathanBhanji/tail-chat/internal/crypto"
 	"github.com/NathanBhanji/tail-chat/internal/discovery"
+	"github.com/NathanBhanji/tail-chat/internal/giphy"
 	tcnet "github.com/NathanBhanji/tail-chat/internal/net"
 )
 
@@ -718,4 +722,828 @@ func visualWidth(s string) int {
 		w++
 	}
 	return w
+}
+
+// --- GIF Picker Snapshot Tests ---
+
+func TestViewGifPickerLoading(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 30
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.gifPicker = gifPicker{
+		query:   "cats",
+		loading: true,
+		thumbs:  make(map[int]image.Image),
+	}
+	m.input.Placeholder = "Search GIFs..."
+	m.input.Focus()
+
+	out := m.View()
+
+	if !strings.Contains(out, "GIF Search") {
+		t.Error("expected 'GIF Search' header")
+	}
+	if !strings.Contains(out, "cats") {
+		t.Error("expected query 'cats' in header")
+	}
+	if !strings.Contains(out, "Searching Giphy") {
+		t.Error("expected loading indicator")
+	}
+	// Sidebar should still be visible
+	if !strings.Contains(out, "alice") {
+		t.Error("expected sidebar peer 'alice' visible during GIF picker")
+	}
+}
+
+func TestViewGifPickerError(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 30
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.gifPicker = gifPicker{
+		query:  "test",
+		err:    "giphy: status 429",
+		thumbs: make(map[int]image.Image),
+	}
+
+	out := m.View()
+
+	if !strings.Contains(out, "GIF Search") {
+		t.Error("expected 'GIF Search' header")
+	}
+	if !strings.Contains(out, "429") {
+		t.Error("expected error message in output")
+	}
+}
+
+func TestViewGifPickerEmptyResults(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 30
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.gifPicker = gifPicker{
+		query:   "zzzzzzzzzznonexistent",
+		results: []giphy.GIF{},
+		thumbs:  make(map[int]image.Image),
+	}
+
+	out := m.View()
+
+	if !strings.Contains(out, "No results") {
+		t.Error("expected 'No results' message")
+	}
+}
+
+func TestViewGifPickerWithResults(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 40
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.gifPicker = gifPicker{
+		query: "cats",
+		results: []giphy.GIF{
+			{Title: "funny cat", Images: giphy.Images{FixedHeight: giphy.ImageData{URL: "http://a.gif"}}},
+			{Title: "cute kitten", Images: giphy.Images{FixedHeight: giphy.ImageData{URL: "http://b.gif"}}},
+			{Title: "cat meme", Images: giphy.Images{FixedHeight: giphy.ImageData{URL: "http://c.gif"}}},
+		},
+		thumbs: make(map[int]image.Image),
+		cursor: 0,
+	}
+	m.input.Placeholder = "Search GIFs..."
+	m.input.Focus()
+
+	out := m.View()
+
+	if !strings.Contains(out, "GIF Search: cats") {
+		t.Error("expected header with query")
+	}
+	// Titles should appear (at least the loading/labels)
+	if !strings.Contains(out, "funny cat") {
+		t.Error("expected first GIF title")
+	}
+	if !strings.Contains(out, "cute kitten") {
+		t.Error("expected second GIF title")
+	}
+	if !strings.Contains(out, "cat meme") {
+		t.Error("expected third GIF title")
+	}
+	// Help text
+	if !strings.Contains(out, "navigate") {
+		t.Error("expected navigation help text")
+	}
+	if !strings.Contains(out, "esc") {
+		t.Error("expected esc help text")
+	}
+}
+
+func TestViewGifPickerWithThumbnails(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 40
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+
+	// Create picker with loaded thumbnails
+	thumbs := make(map[int]image.Image)
+	thumbs[0] = testImage(50, 40, color.RGBA{R: 255, A: 255})
+	thumbs[1] = testImage(50, 40, color.RGBA{G: 255, A: 255})
+
+	m.gifPicker = gifPicker{
+		query: "colors",
+		results: []giphy.GIF{
+			{Title: "red", Images: giphy.Images{FixedHeight: giphy.ImageData{URL: "http://red.gif"}}},
+			{Title: "green", Images: giphy.Images{FixedHeight: giphy.ImageData{URL: "http://green.gif"}}},
+		},
+		thumbs: thumbs,
+		cursor: 0,
+	}
+
+	out := m.View()
+
+	// Should contain half-block characters from rendered thumbnails
+	if !strings.Contains(out, "\u2580") {
+		t.Error("expected half-block characters from rendered thumbnails")
+	}
+	if !strings.Contains(out, "red") {
+		t.Error("expected 'red' title")
+	}
+	if !strings.Contains(out, "green") {
+		t.Error("expected 'green' title")
+	}
+}
+
+func TestViewGifPickerDefaultTitle(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 40
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.gifPicker = gifPicker{
+		query: "test",
+		results: []giphy.GIF{
+			{Title: "", Images: giphy.Images{}}, // empty title
+		},
+		thumbs: make(map[int]image.Image),
+		cursor: 0,
+	}
+
+	out := m.View()
+
+	// Should show default title "GIF 1" when title is empty
+	if !strings.Contains(out, "GIF 1") {
+		t.Error("expected default 'GIF 1' title for unnamed GIF")
+	}
+}
+
+func TestViewGifPickerCursorHighlight(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 40
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+
+	// Test that cursor position affects rendering through key handling
+	m.gifPicker = gifPicker{
+		query:   "test",
+		results: make([]giphy.GIF, 6),
+		thumbs:  make(map[int]image.Image),
+		cursor:  0,
+	}
+
+	// Move cursor right via key handling
+	updated, _ := m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	um := updated.(Model)
+	if um.gifPicker.cursor != 1 {
+		t.Errorf("cursor after right: %d, want 1", um.gifPicker.cursor)
+	}
+
+	// Move cursor down
+	m.gifPicker.cursor = 0
+	updated, _ = m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	um = updated.(Model)
+	if um.gifPicker.cursor != gifPickerGridCols {
+		t.Errorf("cursor after down: %d, want %d", um.gifPicker.cursor, gifPickerGridCols)
+	}
+}
+
+func TestViewGifPickerAtVariousWidths(t *testing.T) {
+	widths := []int{40, 60, 80, 100, 150}
+
+	for _, w := range widths {
+		t.Run(strings.Repeat("w", w/10), func(t *testing.T) {
+			m, cleanup := setupTestModel(t)
+			defer cleanup()
+
+			m.width = w
+			m.height = 30
+			m.view = ViewGifPicker
+			m.activeChatKey = "alice"
+			m.gifPicker = gifPicker{
+				query: "test",
+				results: []giphy.GIF{
+					{Title: "a", Images: giphy.Images{}},
+					{Title: "b", Images: giphy.Images{}},
+				},
+				thumbs: make(map[int]image.Image),
+			}
+
+			out := m.View()
+			if len(out) == 0 {
+				t.Errorf("width=%d: empty view output", w)
+			}
+			if !strings.Contains(out, "GIF Search") {
+				t.Errorf("width=%d: missing header", w)
+			}
+		})
+	}
+}
+
+// --- GIF Picker Key Handling Tests ---
+
+func TestGifPickerKeys_EscReturnsToChat(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 30
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.gifPicker = gifPicker{
+		query:   "cats",
+		results: []giphy.GIF{{Title: "cat"}},
+		thumbs:  make(map[int]image.Image),
+	}
+
+	updated, _ := m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyEscape})
+	um := updated.(Model)
+
+	if um.view != ViewChat {
+		t.Errorf("expected ViewChat after esc, got %d", um.view)
+	}
+	if um.focusPane != PaneChat {
+		t.Errorf("expected PaneChat after esc, got %d", um.focusPane)
+	}
+}
+
+func TestGifPickerKeys_EscReturnsToEmpty(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 30
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "" // no active chat
+	m.gifPicker = gifPicker{thumbs: make(map[int]image.Image)}
+
+	updated, _ := m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyEscape})
+	um := updated.(Model)
+
+	if um.view != ViewEmpty {
+		t.Errorf("expected ViewEmpty after esc with no active chat, got %d", um.view)
+	}
+	if um.focusPane != PaneSidebar {
+		t.Errorf("expected PaneSidebar, got %d", um.focusPane)
+	}
+}
+
+func TestGifPickerKeys_ArrowNavigation(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 30
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.gifPicker = gifPicker{
+		results: make([]giphy.GIF, 9), // 3x3 grid
+		thumbs:  make(map[int]image.Image),
+		cursor:  0,
+	}
+
+	// Right
+	updated, _ := m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	um := updated.(Model)
+	if um.gifPicker.cursor != 1 {
+		t.Errorf("right: cursor = %d, want 1", um.gifPicker.cursor)
+	}
+
+	// Down (should jump by gridCols = 3)
+	m.gifPicker.cursor = 0
+	updated, _ = m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	um = updated.(Model)
+	if um.gifPicker.cursor != 3 {
+		t.Errorf("down: cursor = %d, want 3", um.gifPicker.cursor)
+	}
+
+	// Up from row 2
+	m.gifPicker.cursor = 4
+	updated, _ = m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	um = updated.(Model)
+	if um.gifPicker.cursor != 1 {
+		t.Errorf("up: cursor = %d, want 1", um.gifPicker.cursor)
+	}
+
+	// Left
+	m.gifPicker.cursor = 2
+	updated, _ = m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	um = updated.(Model)
+	if um.gifPicker.cursor != 1 {
+		t.Errorf("left: cursor = %d, want 1", um.gifPicker.cursor)
+	}
+}
+
+func TestGifPickerKeys_CursorBounds(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewGifPicker
+	m.gifPicker = gifPicker{
+		results: make([]giphy.GIF, 3),
+		thumbs:  make(map[int]image.Image),
+		cursor:  0,
+	}
+
+	// Left at 0 should stay at 0
+	updated, _ := m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	um := updated.(Model)
+	if um.gifPicker.cursor != 0 {
+		t.Errorf("left at 0: cursor = %d, want 0", um.gifPicker.cursor)
+	}
+
+	// Right at last should stay at last
+	m.gifPicker.cursor = 2
+	updated, _ = m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	um = updated.(Model)
+	if um.gifPicker.cursor != 2 {
+		t.Errorf("right at end: cursor = %d, want 2", um.gifPicker.cursor)
+	}
+
+	// Up at row 0 should stay
+	m.gifPicker.cursor = 1
+	updated, _ = m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	um = updated.(Model)
+	if um.gifPicker.cursor != 1 {
+		t.Errorf("up at row 0: cursor = %d, want 1", um.gifPicker.cursor)
+	}
+
+	// Down when would exceed results should stay
+	m.gifPicker.cursor = 1
+	updated, _ = m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	um = updated.(Model)
+	if um.gifPicker.cursor != 1 {
+		t.Errorf("down beyond end: cursor = %d, want 1", um.gifPicker.cursor)
+	}
+}
+
+func TestGifPickerKeys_EnterSendsGIF(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.gifPicker = gifPicker{
+		query: "test",
+		results: []giphy.GIF{
+			{
+				Title: "selected",
+				Images: giphy.Images{
+					FixedHeight: giphy.ImageData{URL: "https://media.giphy.com/selected.gif"},
+				},
+			},
+		},
+		thumbs: make(map[int]image.Image),
+		cursor: 0,
+	}
+	m.input.SetValue("") // empty input = send selected
+
+	updated, cmd := m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	um := updated.(Model)
+
+	// Should return to chat view
+	if um.view != ViewChat {
+		t.Errorf("expected ViewChat after sending GIF, got %d", um.view)
+	}
+
+	// Should have a command (async send)
+	if cmd == nil {
+		t.Fatal("expected non-nil command for GIF send")
+	}
+
+	// Execute the command to verify it produces MessageSentMsg
+	msg := cmd()
+	if _, ok := msg.(MessageSentMsg); !ok {
+		t.Errorf("expected MessageSentMsg, got %T", msg)
+	}
+}
+
+func TestGifPickerKeys_EnterWithTextSearches(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewGifPicker
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.gifPicker = gifPicker{
+		query:   "old query",
+		results: []giphy.GIF{{Title: "old"}},
+		thumbs:  make(map[int]image.Image),
+		cursor:  0,
+	}
+	m.input.SetValue("new search")
+
+	updated, cmd := m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	um := updated.(Model)
+
+	// Should stay in picker view with new query
+	if um.view != ViewGifPicker {
+		t.Errorf("expected ViewGifPicker for new search, got %d", um.view)
+	}
+	if um.gifPicker.query != "new search" {
+		t.Errorf("expected query 'new search', got %q", um.gifPicker.query)
+	}
+	if !um.gifPicker.loading {
+		t.Error("expected loading=true for new search")
+	}
+	if um.gifPicker.cursor != 0 {
+		t.Error("expected cursor reset to 0 for new search")
+	}
+	if cmd == nil {
+		t.Fatal("expected non-nil command for search")
+	}
+}
+
+func TestGifPickerKeys_EnterEmptyResultsNoOp(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewGifPicker
+	m.gifPicker = gifPicker{
+		results: nil, // no results
+		thumbs:  make(map[int]image.Image),
+	}
+	m.input.SetValue("")
+
+	updated, cmd := m.handleGifPickerKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	um := updated.(Model)
+
+	// Should stay in picker (nothing to send)
+	if um.view != ViewGifPicker {
+		t.Errorf("expected ViewGifPicker, got %d", um.view)
+	}
+	if cmd != nil {
+		t.Error("expected nil command when nothing to send")
+	}
+}
+
+// --- GIF Command Integration Tests ---
+
+func TestChatKeys_GifCommand(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 30
+	m.view = ViewChat
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.input.SetValue("/gif cats")
+	m.input.Focus()
+
+	updated, cmd := m.handleChatKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	um := updated.(Model)
+
+	if um.view != ViewGifPicker {
+		t.Errorf("expected ViewGifPicker, got %d", um.view)
+	}
+	if um.gifPicker.query != "cats" {
+		t.Errorf("expected query 'cats', got %q", um.gifPicker.query)
+	}
+	if !um.gifPicker.loading {
+		t.Error("expected loading=true")
+	}
+	if cmd == nil {
+		t.Fatal("expected search command")
+	}
+}
+
+func TestChatKeys_GifCommandNoQuery(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewChat
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.input.SetValue("/gif")
+
+	updated, cmd := m.handleChatKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	um := updated.(Model)
+
+	if um.view != ViewGifPicker {
+		t.Errorf("expected ViewGifPicker, got %d", um.view)
+	}
+	if um.gifPicker.query != "trending" {
+		t.Errorf("expected 'trending' default query, got %q", um.gifPicker.query)
+	}
+	if cmd == nil {
+		t.Fatal("expected search command")
+	}
+}
+
+func TestChatKeys_GifCommandWithSpaces(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewChat
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.input.SetValue("/gif funny dancing cat")
+
+	updated, _ := m.handleChatKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	um := updated.(Model)
+
+	if um.gifPicker.query != "funny dancing cat" {
+		t.Errorf("expected multi-word query, got %q", um.gifPicker.query)
+	}
+}
+
+// --- Update() Message Handling Tests ---
+
+func TestUpdate_GifSearchResultMsg(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 30
+	m.view = ViewGifPicker
+	m.gifPicker = gifPicker{
+		query:   "cats",
+		loading: true,
+		thumbs:  make(map[int]image.Image),
+	}
+
+	results := []giphy.GIF{
+		{Title: "cat1", Images: giphy.Images{FixedHeightStill: giphy.ImageData{URL: "http://1.gif"}}},
+		{Title: "cat2", Images: giphy.Images{FixedHeightStill: giphy.ImageData{URL: "http://2.gif"}}},
+	}
+
+	updated, cmd := m.Update(GifSearchResultMsg{Results: results})
+	um := updated.(Model)
+
+	if um.gifPicker.loading {
+		t.Error("expected loading=false after results")
+	}
+	if len(um.gifPicker.results) != 2 {
+		t.Errorf("expected 2 results, got %d", len(um.gifPicker.results))
+	}
+	if um.gifPicker.cursor != 0 {
+		t.Error("expected cursor reset to 0")
+	}
+	if cmd == nil {
+		t.Fatal("expected thumbnail loading command")
+	}
+}
+
+func TestUpdate_GifSearchResultMsg_Error(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewGifPicker
+	m.gifPicker = gifPicker{
+		query:   "cats",
+		loading: true,
+		thumbs:  make(map[int]image.Image),
+	}
+
+	updated, _ := m.Update(GifSearchResultMsg{Err: image.ErrFormat})
+	um := updated.(Model)
+
+	if um.gifPicker.loading {
+		t.Error("expected loading=false after error")
+	}
+	if um.gifPicker.err == "" {
+		t.Error("expected error message to be set")
+	}
+}
+
+func TestUpdate_GifThumbLoadedMsg(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewGifPicker
+	m.gifPicker = gifPicker{
+		query:   "cats",
+		results: make([]giphy.GIF, 3),
+		thumbs:  make(map[int]image.Image),
+	}
+
+	img := testImage(50, 40, color.RGBA{R: 200, A: 255})
+	updated, _ := m.Update(GifThumbLoadedMsg{Index: 1, Img: img})
+	um := updated.(Model)
+
+	if _, ok := um.gifPicker.thumbs[1]; !ok {
+		t.Error("expected thumbnail stored at index 1")
+	}
+}
+
+func TestUpdate_GifThumbLoadedMsg_Error(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewGifPicker
+	m.gifPicker = gifPicker{
+		thumbs: make(map[int]image.Image),
+	}
+
+	updated, _ := m.Update(GifThumbLoadedMsg{Index: 0, Err: image.ErrFormat})
+	um := updated.(Model)
+
+	if _, ok := um.gifPicker.thumbs[0]; ok {
+		t.Error("should not store thumbnail on error")
+	}
+}
+
+func TestUpdate_ImageCachedMsg(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	// ImageCachedMsg should not panic or cause issues
+	updated, _ := m.Update(ImageCachedMsg{URL: "http://example.com/test.gif"})
+	if updated == nil {
+		t.Error("expected non-nil model")
+	}
+}
+
+// --- Inline Image in Chat View Tests ---
+
+func TestViewChatWithImageURL(t *testing.T) {
+	clearImageCache()
+	defer clearImageCache()
+
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 30
+	m.view = ViewChat
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.messages = []chat.Message{
+		{
+			ID:        "1",
+			Sender:    "alice",
+			Content:   "https://media.giphy.com/media/abc123/200.gif",
+			Timestamp: time.Now(),
+		},
+	}
+
+	// Without cached image, should show [GIF] label
+	out := m.View()
+	if !strings.Contains(out, "[GIF]") {
+		t.Error("expected [GIF] label for uncached image URL")
+	}
+}
+
+func TestViewChatWithCachedImage(t *testing.T) {
+	clearImageCache()
+	defer clearImageCache()
+
+	// Force non-Kitty mode for predictable output
+	kittyDetected = nil
+	origTerm := os.Getenv("TERM")
+	origProg := os.Getenv("TERM_PROGRAM")
+	os.Setenv("TERM", "xterm-256color")
+	os.Setenv("TERM_PROGRAM", "")
+	defer func() {
+		os.Setenv("TERM", origTerm)
+		os.Setenv("TERM_PROGRAM", origProg)
+		kittyDetected = nil
+	}()
+
+	url := "https://media.giphy.com/media/abc123/200.gif"
+	setCachedImage(url, testImage(80, 60, color.RGBA{R: 200, G: 100, B: 50, A: 255}), nil)
+
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 40
+	m.view = ViewChat
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+	m.messages = []chat.Message{
+		{
+			ID:        "1",
+			Sender:    "alice",
+			Content:   url,
+			Timestamp: time.Now(),
+		},
+	}
+
+	out := m.View()
+
+	// Should contain [GIF] label
+	if !strings.Contains(out, "[GIF]") {
+		t.Error("expected [GIF] label")
+	}
+
+	// Should contain half-block characters from inline rendering
+	if !strings.Contains(out, "\u2580") {
+		t.Error("expected half-block inline image rendering")
+	}
+}
+
+func TestViewChatHelp_IncludesGif(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.width = 100
+	m.height = 30
+	m.view = ViewChat
+	m.focusPane = PaneChat
+	m.activeChatKey = "alice"
+
+	out := m.View()
+
+	if !strings.Contains(out, "/gif") {
+		t.Error("expected /gif in help text")
+	}
+}
+
+// --- Interactive GIF Picker Tests ---
+
+func TestInteractiveGifPickerOpen(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewChat
+	m.activeChatKey = "alice"
+	m.focusPane = PaneChat
+	m.input.Focus()
+
+	tm := newTestProgram(t, m)
+	waitForText(t, tm, "alice")
+
+	// Type /gif cats and press enter
+	tm.Type("/gif cats")
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Should show GIF Search header
+	waitForText(t, tm, "GIF Search")
+
+	tm.Send(tea.QuitMsg{})
+	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+}
+
+func TestInteractiveGifPickerEsc(t *testing.T) {
+	m, cleanup := setupTestModel(t)
+	defer cleanup()
+
+	m.view = ViewGifPicker
+	m.activeChatKey = "alice"
+	m.focusPane = PaneChat
+	m.gifPicker = gifPicker{
+		query:  "test",
+		thumbs: make(map[int]image.Image),
+	}
+	m.input.Placeholder = "Search GIFs..."
+	m.input.Focus()
+
+	tm := newTestProgram(t, m)
+	waitForText(t, tm, "GIF Search")
+
+	// Esc should return to chat
+	tm.Send(tea.KeyMsg{Type: tea.KeyEscape})
+	time.Sleep(200 * time.Millisecond)
+
+	tm.Send(tea.QuitMsg{})
+	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
 }
