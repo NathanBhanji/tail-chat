@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NathanBhanji/tail-chat/internal/giphy"
+	"github.com/NathanBhanji/tail-chat/internal/tenor"
 )
 
 // ─── Test helpers ───────────────────────────────────────────────────
@@ -596,16 +596,15 @@ func TestKittySupported_CachesResult(t *testing.T) {
 
 func TestGifPicker_SelectedSendURL(t *testing.T) {
 	gp := gifPicker{
-		results: []giphy.GIF{
+		results: []tenor.GIF{
 			{
-				Images: giphy.Images{
-					FixedHeight: giphy.ImageData{URL: "https://media.giphy.com/200.gif"},
-					Original:    giphy.ImageData{URL: "https://media.giphy.com/original.gif"},
+				Media: tenor.MediaFormats{
+					GIF: tenor.MediaObject{URL: "https://media.tenor.com/full.gif"},
 				},
 			},
 			{
-				Images: giphy.Images{
-					Original: giphy.ImageData{URL: "https://media.giphy.com/original2.gif"},
+				Media: tenor.MediaFormats{
+					TinyGIF: tenor.MediaObject{URL: "https://media.tenor.com/tiny.gif"},
 				},
 			},
 		},
@@ -613,23 +612,23 @@ func TestGifPicker_SelectedSendURL(t *testing.T) {
 		thumbs: make(map[int]image.Image),
 	}
 
-	// Should prefer FixedHeight
+	// Should prefer GIF URL
 	url := gp.selectedSendURL()
-	if url != "https://media.giphy.com/200.gif" {
-		t.Errorf("expected FixedHeight URL, got %q", url)
+	if url != "https://media.tenor.com/full.gif" {
+		t.Errorf("expected GIF URL, got %q", url)
 	}
 
-	// Second result has no FixedHeight — should fall back to Original
+	// Second result has no GIF URL — should fall back to TinyGIF
 	gp.cursor = 1
 	url = gp.selectedSendURL()
-	if url != "https://media.giphy.com/original2.gif" {
-		t.Errorf("expected Original URL fallback, got %q", url)
+	if url != "https://media.tenor.com/tiny.gif" {
+		t.Errorf("expected TinyGIF URL fallback, got %q", url)
 	}
 }
 
 func TestGifPicker_SelectedSendURL_OutOfBounds(t *testing.T) {
 	gp := gifPicker{
-		results: []giphy.GIF{{Images: giphy.Images{}}},
+		results: []tenor.GIF{{Media: tenor.MediaFormats{}}},
 		cursor:  5,
 		thumbs:  make(map[int]image.Image),
 	}
@@ -653,47 +652,47 @@ func TestGifPicker_SelectedSendURL_EmptyResults(t *testing.T) {
 
 func TestGifPicker_ThumbURL_Priority(t *testing.T) {
 	gp := gifPicker{
-		results: []giphy.GIF{
+		results: []tenor.GIF{
 			{
-				Images: giphy.Images{
-					FixedHeightStill: giphy.ImageData{URL: "https://still.gif"},
-					FixedWidthSmall:  giphy.ImageData{URL: "https://small.gif"},
-					FixedHeight:      giphy.ImageData{URL: "https://full.gif"},
+				Media: tenor.MediaFormats{
+					TinyGIF: tenor.MediaObject{URL: "https://still.gif"},
+					NanoGIF: tenor.MediaObject{URL: "https://small.gif"},
+					GIF:     tenor.MediaObject{URL: "https://full.gif"},
 				},
 			},
 			{
-				Images: giphy.Images{
-					FixedWidthSmall: giphy.ImageData{URL: "https://small2.gif"},
-					FixedHeight:     giphy.ImageData{URL: "https://full2.gif"},
+				Media: tenor.MediaFormats{
+					NanoGIF: tenor.MediaObject{URL: "https://small2.gif"},
+					GIF:     tenor.MediaObject{URL: "https://full2.gif"},
 				},
 			},
 			{
-				Images: giphy.Images{
-					FixedHeight: giphy.ImageData{URL: "https://full3.gif"},
+				Media: tenor.MediaFormats{
+					GIF: tenor.MediaObject{URL: "https://full3.gif"},
 				},
 			},
 		},
 		thumbs: make(map[int]image.Image),
 	}
 
-	// Should prefer FixedHeightStill
+	// Should prefer TinyGIF
 	if url := gp.thumbURL(0); url != "https://still.gif" {
-		t.Errorf("expected FixedHeightStill, got %q", url)
+		t.Errorf("expected TinyGIF, got %q", url)
 	}
 
-	// Should fall back to FixedWidthSmall
+	// Should fall back to NanoGIF
 	if url := gp.thumbURL(1); url != "https://small2.gif" {
-		t.Errorf("expected FixedWidthSmall, got %q", url)
+		t.Errorf("expected NanoGIF, got %q", url)
 	}
 
-	// Should fall back to FixedHeight
+	// Should fall back to GIF
 	if url := gp.thumbURL(2); url != "https://full3.gif" {
-		t.Errorf("expected FixedHeight, got %q", url)
+		t.Errorf("expected GIF, got %q", url)
 	}
 }
 
 func TestGifPicker_ThumbURL_OutOfBounds(t *testing.T) {
-	gp := gifPicker{results: []giphy.GIF{{}}, thumbs: make(map[int]image.Image)}
+	gp := gifPicker{results: []tenor.GIF{{}}, thumbs: make(map[int]image.Image)}
 	if url := gp.thumbURL(5); url != "" {
 		t.Errorf("expected empty URL for out-of-bounds, got %q", url)
 	}
@@ -1047,10 +1046,10 @@ func TestGifLoadThumbCmd_Error(t *testing.T) {
 
 func TestGifLoadThumbsCmd_BatchesCommands(t *testing.T) {
 	gp := &gifPicker{
-		results: []giphy.GIF{
-			{Images: giphy.Images{FixedHeightStill: giphy.ImageData{URL: "http://a.com/1.gif"}}},
-			{Images: giphy.Images{FixedHeightStill: giphy.ImageData{URL: "http://a.com/2.gif"}}},
-			{Images: giphy.Images{FixedHeightStill: giphy.ImageData{URL: "http://a.com/3.gif"}}},
+		results: []tenor.GIF{
+			{Media: tenor.MediaFormats{TinyGIF: tenor.MediaObject{URL: "http://a.com/1.gif"}}},
+			{Media: tenor.MediaFormats{TinyGIF: tenor.MediaObject{URL: "http://a.com/2.gif"}}},
+			{Media: tenor.MediaFormats{TinyGIF: tenor.MediaObject{URL: "http://a.com/3.gif"}}},
 		},
 		thumbs: make(map[int]image.Image),
 	}

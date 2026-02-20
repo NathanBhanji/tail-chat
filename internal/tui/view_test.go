@@ -15,8 +15,8 @@ import (
 	"github.com/NathanBhanji/tail-chat/internal/chat"
 	"github.com/NathanBhanji/tail-chat/internal/crypto"
 	"github.com/NathanBhanji/tail-chat/internal/discovery"
-	"github.com/NathanBhanji/tail-chat/internal/giphy"
 	tcnet "github.com/NathanBhanji/tail-chat/internal/net"
+	"github.com/NathanBhanji/tail-chat/internal/tenor"
 )
 
 // testPeers returns a realistic set of peers for testing.
@@ -751,7 +751,7 @@ func TestViewGifPickerLoading(t *testing.T) {
 	if !strings.Contains(out, "cats") {
 		t.Error("expected query 'cats' in header")
 	}
-	if !strings.Contains(out, "Searching Giphy") {
+	if !strings.Contains(out, "Searching Tenor") {
 		t.Error("expected loading indicator")
 	}
 	// Sidebar should still be visible
@@ -771,7 +771,7 @@ func TestViewGifPickerError(t *testing.T) {
 	m.activeChatKey = "alice"
 	m.gifPicker = gifPicker{
 		query:  "test",
-		err:    "giphy: status 429",
+		err:    "tenor: status 429",
 		thumbs: make(map[int]image.Image),
 	}
 
@@ -796,7 +796,7 @@ func TestViewGifPickerEmptyResults(t *testing.T) {
 	m.activeChatKey = "alice"
 	m.gifPicker = gifPicker{
 		query:   "zzzzzzzzzznonexistent",
-		results: []giphy.GIF{},
+		results: []tenor.GIF{},
 		thumbs:  make(map[int]image.Image),
 	}
 
@@ -818,10 +818,10 @@ func TestViewGifPickerWithResults(t *testing.T) {
 	m.activeChatKey = "alice"
 	m.gifPicker = gifPicker{
 		query: "cats",
-		results: []giphy.GIF{
-			{Title: "funny cat", Images: giphy.Images{FixedHeight: giphy.ImageData{URL: "http://a.gif"}}},
-			{Title: "cute kitten", Images: giphy.Images{FixedHeight: giphy.ImageData{URL: "http://b.gif"}}},
-			{Title: "cat meme", Images: giphy.Images{FixedHeight: giphy.ImageData{URL: "http://c.gif"}}},
+		results: []tenor.GIF{
+			{Title: "funny cat", Media: tenor.MediaFormats{GIF: tenor.MediaObject{URL: "http://a.gif"}}},
+			{Title: "cute kitten", Media: tenor.MediaFormats{GIF: tenor.MediaObject{URL: "http://b.gif"}}},
+			{Title: "cat meme", Media: tenor.MediaFormats{GIF: tenor.MediaObject{URL: "http://c.gif"}}},
 		},
 		thumbs: make(map[int]image.Image),
 		cursor: 0,
@@ -870,9 +870,9 @@ func TestViewGifPickerWithThumbnails(t *testing.T) {
 
 	m.gifPicker = gifPicker{
 		query: "colors",
-		results: []giphy.GIF{
-			{Title: "red", Images: giphy.Images{FixedHeight: giphy.ImageData{URL: "http://red.gif"}}},
-			{Title: "green", Images: giphy.Images{FixedHeight: giphy.ImageData{URL: "http://green.gif"}}},
+		results: []tenor.GIF{
+			{Title: "red", Media: tenor.MediaFormats{GIF: tenor.MediaObject{URL: "http://red.gif"}}},
+			{Title: "green", Media: tenor.MediaFormats{GIF: tenor.MediaObject{URL: "http://green.gif"}}},
 		},
 		thumbs: thumbs,
 		cursor: 0,
@@ -903,8 +903,8 @@ func TestViewGifPickerDefaultTitle(t *testing.T) {
 	m.activeChatKey = "alice"
 	m.gifPicker = gifPicker{
 		query: "test",
-		results: []giphy.GIF{
-			{Title: "", Images: giphy.Images{}}, // empty title
+		results: []tenor.GIF{
+			{Title: "", Media: tenor.MediaFormats{}}, // empty title
 		},
 		thumbs: make(map[int]image.Image),
 		cursor: 0,
@@ -931,7 +931,7 @@ func TestViewGifPickerCursorHighlight(t *testing.T) {
 	// Test that cursor position affects rendering through key handling
 	m.gifPicker = gifPicker{
 		query:   "test",
-		results: make([]giphy.GIF, 6),
+		results: make([]tenor.GIF, 6),
 		thumbs:  make(map[int]image.Image),
 		cursor:  0,
 	}
@@ -966,9 +966,9 @@ func TestViewGifPickerAtVariousWidths(t *testing.T) {
 			m.activeChatKey = "alice"
 			m.gifPicker = gifPicker{
 				query: "test",
-				results: []giphy.GIF{
-					{Title: "a", Images: giphy.Images{}},
-					{Title: "b", Images: giphy.Images{}},
+				results: []tenor.GIF{
+					{Title: "a", Media: tenor.MediaFormats{}},
+					{Title: "b", Media: tenor.MediaFormats{}},
 				},
 				thumbs: make(map[int]image.Image),
 			}
@@ -997,7 +997,7 @@ func TestGifPickerKeys_EscReturnsToChat(t *testing.T) {
 	m.activeChatKey = "alice"
 	m.gifPicker = gifPicker{
 		query:   "cats",
-		results: []giphy.GIF{{Title: "cat"}},
+		results: []tenor.GIF{{Title: "cat"}},
 		thumbs:  make(map[int]image.Image),
 	}
 
@@ -1043,7 +1043,7 @@ func TestGifPickerKeys_ArrowNavigation(t *testing.T) {
 	m.view = ViewGifPicker
 	m.focusPane = PaneChat
 	m.gifPicker = gifPicker{
-		results: make([]giphy.GIF, 9), // 3x3 grid
+		results: make([]tenor.GIF, 9), // 3x3 grid
 		thumbs:  make(map[int]image.Image),
 		cursor:  0,
 	}
@@ -1086,7 +1086,7 @@ func TestGifPickerKeys_CursorBounds(t *testing.T) {
 
 	m.view = ViewGifPicker
 	m.gifPicker = gifPicker{
-		results: make([]giphy.GIF, 3),
+		results: make([]tenor.GIF, 3),
 		thumbs:  make(map[int]image.Image),
 		cursor:  0,
 	}
@@ -1132,11 +1132,11 @@ func TestGifPickerKeys_EnterSendsGIF(t *testing.T) {
 	m.activeChatKey = "alice"
 	m.gifPicker = gifPicker{
 		query: "test",
-		results: []giphy.GIF{
+		results: []tenor.GIF{
 			{
 				Title: "selected",
-				Images: giphy.Images{
-					FixedHeight: giphy.ImageData{URL: "https://media.giphy.com/selected.gif"},
+				Media: tenor.MediaFormats{
+					GIF: tenor.MediaObject{URL: "https://media.tenor.com/selected.gif"},
 				},
 			},
 		},
@@ -1174,7 +1174,7 @@ func TestGifPickerKeys_EnterWithTextSearches(t *testing.T) {
 	m.activeChatKey = "alice"
 	m.gifPicker = gifPicker{
 		query:   "old query",
-		results: []giphy.GIF{{Title: "old"}},
+		results: []tenor.GIF{{Title: "old"}},
 		thumbs:  make(map[int]image.Image),
 		cursor:  0,
 	}
@@ -1310,9 +1310,9 @@ func TestUpdate_GifSearchResultMsg(t *testing.T) {
 		thumbs:  make(map[int]image.Image),
 	}
 
-	results := []giphy.GIF{
-		{Title: "cat1", Images: giphy.Images{FixedHeightStill: giphy.ImageData{URL: "http://1.gif"}}},
-		{Title: "cat2", Images: giphy.Images{FixedHeightStill: giphy.ImageData{URL: "http://2.gif"}}},
+	results := []tenor.GIF{
+		{Title: "cat1", Media: tenor.MediaFormats{TinyGIF: tenor.MediaObject{URL: "http://1.gif"}}},
+		{Title: "cat2", Media: tenor.MediaFormats{TinyGIF: tenor.MediaObject{URL: "http://2.gif"}}},
 	}
 
 	updated, cmd := m.Update(GifSearchResultMsg{Results: results})
@@ -1361,7 +1361,7 @@ func TestUpdate_GifThumbLoadedMsg(t *testing.T) {
 	m.view = ViewGifPicker
 	m.gifPicker = gifPicker{
 		query:   "cats",
-		results: make([]giphy.GIF, 3),
+		results: make([]tenor.GIF, 3),
 		thumbs:  make(map[int]image.Image),
 	}
 
@@ -1420,7 +1420,7 @@ func TestViewChatWithImageURL(t *testing.T) {
 		{
 			ID:        "1",
 			Sender:    "alice",
-			Content:   "https://media.giphy.com/media/abc123/200.gif",
+			Content:   "https://media.tenor.com/abc123/gif.gif",
 			Timestamp: time.Now(),
 		},
 	}
@@ -1448,7 +1448,7 @@ func TestViewChatWithCachedImage(t *testing.T) {
 		kittyDetected = nil
 	}()
 
-	url := "https://media.giphy.com/media/abc123/200.gif"
+	url := "https://media.tenor.com/abc123/gif.gif"
 	setCachedImage(url, testImage(80, 60, color.RGBA{R: 200, G: 100, B: 50, A: 255}), nil)
 
 	m, cleanup := setupTestModel(t)
