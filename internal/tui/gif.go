@@ -5,7 +5,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
-	_ "image/gif"
+	imagedraw "image/draw"
+	"image/gif"
 	_ "image/jpeg"
 	"image/png"
 	"io"
@@ -95,22 +96,40 @@ func (g *gifPicker) thumbURL(i int) string {
 // ─── Image cache ────────────────────────────────────────────────────
 
 type cachedImg struct {
-	img image.Image
-	err error
+	frames []image.Image // animated GIF frames, or single-element for static
+	delays []int         // delay per frame in 10ms units (from GIF spec)
+	err    error
 }
 
 var (
 	imgCache   = make(map[string]*cachedImg)
 	imgCacheMu sync.RWMutex
+	animTick   uint64 // global animation counter, incremented by AnimTickMsg
 )
 
+// AnimTickMsg advances the global animation frame counter.
+type AnimTickMsg struct{}
+
+func animTickCmd() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return AnimTickMsg{}
+	})
+}
+
+// getCachedImage returns the current animation frame for the given URL.
 func getCachedImage(url string) (image.Image, bool) {
 	imgCacheMu.RLock()
 	defer imgCacheMu.RUnlock()
-	if e, ok := imgCache[url]; ok {
-		return e.img, e.err == nil && e.img != nil
+	e, ok := imgCache[url]
+	if !ok || e.err != nil || len(e.frames) == 0 {
+		return nil, false
 	}
-	return nil, false
+	if len(e.frames) == 1 {
+		return e.frames[0], true
+	}
+	// Pick frame based on global tick — approximate animation timing
+	idx := int(animTick) % len(e.frames)
+	return e.frames[idx], true
 }
 
 func isImageCached(url string) bool {
@@ -118,6 +137,15 @@ func isImageCached(url string) bool {
 	defer imgCacheMu.RUnlock()
 	_, ok := imgCache[url]
 	return ok
+}
+
+func isAnimated(url string) bool {
+	imgCacheMu.RLock()
+	defer imgCacheMu.RUnlock()
+	if e, ok := imgCache[url]; ok {
+		return len(e.frames) > 1
+	}
+	return false
 }
 
 func setCachedImage(url string, img image.Image, err error) {
@@ -129,7 +157,19 @@ func setCachedImage(url string, img image.Image, err error) {
 			break
 		}
 	}
-	imgCache[url] = &cachedImg{img: img, err: err}
+	imgCache[url] = &cachedImg{frames: []image.Image{img}, err: err}
+}
+
+func setCachedFrames(url string, frames []image.Image, delays []int, err error) {
+	imgCacheMu.Lock()
+	defer imgCacheMu.Unlock()
+	if len(imgCache) >= maxCachedImages {
+		for k := range imgCache {
+			delete(imgCache, k)
+			break
+		}
+	}
+	imgCache[url] = &cachedImg{frames: frames, delays: delays, err: err}
 }
 
 // ─── Download tracking ──────────────────────────────────────────────
@@ -157,24 +197,85 @@ func setDownloading(url string, state bool) {
 
 // ─── Image download + resize ────────────────────────────────────────
 
+// downloadResult holds the result of downloading an image or GIF.
+type downloadResult struct {
+	frames []image.Image
+	delays []int
+	err    error
+}
+
 func downloadImage(url string) (image.Image, error) {
+	r := downloadImageFrames(url)
+	if r.err != nil {
+		return nil, r.err
+	}
+	if len(r.frames) == 0 {
+		return nil, fmt.Errorf("no frames decoded")
+	}
+	return r.frames[0], nil
+}
+
+// downloadImageFrames downloads an image/GIF and returns all frames.
+// For animated GIFs, returns multiple frames with delay timings.
+// For static images (PNG/JPEG), returns a single frame.
+func downloadImageFrames(url string) downloadResult {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, err
+		return downloadResult{err: err}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return downloadResult{err: fmt.Errorf("HTTP %d", resp.StatusCode)}
 	}
 
-	lr := io.LimitReader(resp.Body, 10<<20) // 10MB limit
-	img, _, err := image.Decode(lr)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB limit
 	if err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
+		return downloadResult{err: fmt.Errorf("read: %w", err)}
 	}
-	return img, nil
+
+	// Try decoding as animated GIF first
+	if g, err := gif.DecodeAll(bytes.NewReader(data)); err == nil && len(g.Image) > 1 {
+		frames := decodeGIFFrames(g)
+		return downloadResult{frames: frames, delays: g.Delay}
+	}
+
+	// Fall back to single-frame decode for static images
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return downloadResult{err: fmt.Errorf("decode: %w", err)}
+	}
+	return downloadResult{frames: []image.Image{img}}
+}
+
+// decodeGIFFrames composites GIF frames according to disposal methods,
+// producing standalone RGBA images for each frame.
+func decodeGIFFrames(g *gif.GIF) []image.Image {
+	canvas := image.NewRGBA(image.Rect(0, 0, g.Config.Width, g.Config.Height))
+	frames := make([]image.Image, 0, len(g.Image))
+
+	for _, frame := range g.Image {
+		// Draw frame onto canvas
+		imagedraw.Draw(canvas, frame.Bounds(), frame, frame.Bounds().Min, imagedraw.Over)
+
+		// Snapshot the current canvas state
+		snap := image.NewRGBA(canvas.Bounds())
+		copy(snap.Pix, canvas.Pix)
+		frames = append(frames, snap)
+	}
+
+	// Cap frames to avoid excessive memory (keep max 60 frames)
+	if len(frames) > 60 {
+		step := len(frames) / 60
+		sampled := make([]image.Image, 0, 60)
+		for i := 0; i < len(frames); i += step {
+			sampled = append(sampled, frames[i])
+		}
+		frames = sampled
+	}
+
+	return frames
 }
 
 // resizeExact scales an image to exactly w x h pixels.
@@ -380,20 +481,37 @@ func cacheImageCmd(url string) tea.Cmd {
 		}
 		setDownloading(url, true)
 		defer setDownloading(url, false)
-		img, err := downloadImage(url)
-		setCachedImage(url, img, err)
-		return ImageCachedMsg{URL: url, Err: err}
+		r := downloadImageFrames(url)
+		if r.err != nil {
+			setCachedImage(url, nil, r.err)
+			return ImageCachedMsg{URL: url, Err: r.err}
+		}
+		if len(r.frames) > 1 {
+			setCachedFrames(url, r.frames, r.delays, nil)
+		} else if len(r.frames) == 1 {
+			setCachedImage(url, r.frames[0], nil)
+		}
+		return ImageCachedMsg{URL: url}
 	}
 }
 
 // ─── Inline image rendering (chat messages) ─────────────────────────
 
-// renderInlineImage renders a cached image for display in the chat view.
+// renderInlineImage renders an image for display in the chat view.
+// Shows a loading placeholder if the image isn't cached yet.
 // Returns the rendered string and the number of terminal lines it occupies.
 func renderInlineImage(url string, maxCols, maxRows int) (string, int) {
 	img, ok := getCachedImage(url)
 	if !ok || img == nil {
-		return "", 0
+		// Render a placeholder to prevent layout shift
+		var sb strings.Builder
+		sb.WriteString("        ")
+		sb.WriteString(helpStyle.Render("loading image..."))
+		sb.WriteString("\n")
+		for i := 1; i < gifInlineMaxRows; i++ {
+			sb.WriteString("\n")
+		}
+		return sb.String(), gifInlineMaxRows
 	}
 
 	cols := maxCols
@@ -454,17 +572,20 @@ func renderInlineImage(url string, maxCols, maxRows int) (string, int) {
 }
 
 // inlineImageLines returns the number of terminal lines an inline image would
-// consume, without rendering it. Returns 0 if not cached.
+// consume. Returns a fixed reservation height even before the image is cached,
+// to prevent layout shifts when the download completes.
 func inlineImageLines(url string, maxCols, maxRows int) int {
 	img, ok := getCachedImage(url)
 	if !ok || img == nil {
-		return 0
+		// Reserve space before image loads to prevent layout shift.
+		// Use a compact placeholder height.
+		return gifInlineMaxRows
 	}
 
 	bounds := img.Bounds()
 	srcW, srcH := bounds.Dx(), bounds.Dy()
 	if srcW == 0 || srcH == 0 {
-		return 0
+		return gifInlineMaxRows
 	}
 
 	cols := maxCols
