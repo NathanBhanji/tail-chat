@@ -1,0 +1,220 @@
+/* ─── Vapor / Neon Horizon theme styles ─── */
+/* Radically different layout: NO sidebar, horizontal peers, iMessage bubbles */
+
+.vp-root {
+  background: #0a0a12;
+  font-family: 'Space Mono', 'Courier New', monospace;
+  color: #e0d6ff;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* ── Neon grid background ── */
+.vp-grid-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, transparent 0%, rgba(10,10,18,0.95) 45%, #0a0a12 100%),
+    linear-gradient(180deg,
+      transparent 0%,
+      transparent 49.5%,
+      rgba(0,255,200,0.03) 49.5%,
+      rgba(0,255,200,0.03) 50.5%,
+      transparent 50.5%
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0px,
+      transparent 79px,
+      rgba(0,255,200,0.015) 79px,
+      rgba(0,255,200,0.015) 80px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0px,
+      transparent 79px,
+      rgba(0,255,200,0.015) 79px,
+      rgba(0,255,200,0.015) 80px
+    );
+  background-size: 100% 100%, 100% 100%, 80px 80px, 80px 80px;
+}
+
+/* Horizon glow */
+.vp-horizon {
+  position: fixed;
+  bottom: 0;
+  left: -10%;
+  right: -10%;
+  height: 50%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 80% 40% at 50% 100%, rgba(255,0,128,0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 30% at 30% 100%, rgba(0,255,200,0.04) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 30% at 70% 100%, rgba(120,0,255,0.05) 0%, transparent 50%);
+}
+
+/* ── Top bar (drag region + peer strip) ── */
+.vp-topbar {
+  background: rgba(15,15,25,0.85);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border-bottom: 1px solid rgba(0,255,200,0.08);
+}
+
+/* ── Peer pill ── */
+.vp-peer-pill {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.vp-peer-pill:hover {
+  background: rgba(0,255,200,0.06);
+  border-color: rgba(0,255,200,0.15);
+  transform: translateY(-1px);
+}
+.vp-peer-pill-active {
+  background: rgba(0,255,200,0.08) !important;
+  border-color: rgba(0,255,200,0.3) !important;
+  box-shadow: 0 0 20px rgba(0,255,200,0.08), inset 0 0 12px rgba(0,255,200,0.03);
+}
+
+/* ── Chat bubbles ── */
+.vp-bubble-own {
+  background: linear-gradient(135deg, rgba(0,255,200,0.12), rgba(0,200,255,0.08));
+  border: 1px solid rgba(0,255,200,0.15);
+  border-radius: 18px 18px 4px 18px;
+}
+.vp-bubble-them {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 18px 18px 18px 4px;
+}
+
+.vp-bubble-own, .vp-bubble-them {
+  max-width: 520px;
+  transition: all 0.15s ease;
+}
+
+/* ── Message animations ── */
+.vp-msg-enter {
+  animation: vp-slide-in 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.vp-msg-enter:nth-child(1) { animation-delay: 0ms; }
+.vp-msg-enter:nth-child(2) { animation-delay: 40ms; }
+.vp-msg-enter:nth-child(3) { animation-delay: 80ms; }
+.vp-msg-enter:nth-child(4) { animation-delay: 120ms; }
+.vp-msg-enter:nth-child(5) { animation-delay: 160ms; }
+.vp-msg-enter:nth-child(n+6) { animation-delay: 200ms; }
+
+/* ── Input area ── */
+.vp-input {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: #e0d6ff;
+  outline: none;
+  transition: all 0.2s ease;
+  font-family: 'Space Mono', monospace;
+}
+.vp-input::placeholder { color: rgba(224,214,255,0.2); }
+.vp-input:focus {
+  border-color: rgba(0,255,200,0.2);
+  box-shadow: 0 0 20px rgba(0,255,200,0.04);
+}
+
+/* ── Neon send button ── */
+.vp-send-btn {
+  background: linear-gradient(135deg, #00ffc8, #00c8ff);
+  color: #0a0a12;
+  font-weight: 700;
+  border: none;
+  transition: all 0.2s ease;
+  font-family: 'Orbitron', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.vp-send-btn:hover:not(:disabled) {
+  box-shadow: 0 0 24px rgba(0,255,200,0.3), 0 0 48px rgba(0,255,200,0.1);
+  transform: translateY(-1px);
+}
+.vp-send-btn:disabled {
+  opacity: 0.2;
+  cursor: not-allowed;
+}
+
+/* ── GIF picker ── */
+.vp-gif-panel {
+  background: rgba(15,15,25,0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(0,255,200,0.1);
+}
+
+/* ── Settings overlay ── */
+.vp-settings-overlay {
+  background: rgba(5,5,10,0.85);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+}
+
+.vp-theme-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+.vp-theme-card:hover {
+  border-color: rgba(0,255,200,0.15);
+  background: rgba(0,255,200,0.04);
+}
+.vp-theme-card-active {
+  border-color: rgba(0,255,200,0.3) !important;
+  background: rgba(0,255,200,0.06) !important;
+  box-shadow: 0 0 24px rgba(0,255,200,0.06);
+}
+
+/* ── Scrollbar ── */
+.vp-root ::-webkit-scrollbar { width: 4px; height: 4px; }
+.vp-root ::-webkit-scrollbar-track { background: transparent; }
+.vp-root ::-webkit-scrollbar-thumb { background: rgba(0,255,200,0.1); border-radius: 99px; }
+.vp-root ::-webkit-scrollbar-thumb:hover { background: rgba(0,255,200,0.2); }
+
+.vp-root ::selection {
+  background: rgba(0,255,200,0.25);
+  color: #fff;
+}
+
+/* ── Hover reaction bar ── */
+.vp-reactions-bar {
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.group:hover .vp-reactions-bar {
+  opacity: 1;
+}
+
+/* ── Keyframes ── */
+@keyframes vp-slide-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes vp-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vp-glow-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+/* Online dot glow */
+.vp-online-dot {
+  box-shadow: 0 0 6px rgba(0,255,200,0.5);
+  animation: vp-glow-pulse 2s ease-in-out infinite;
+}

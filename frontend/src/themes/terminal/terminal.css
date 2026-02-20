@@ -1,0 +1,194 @@
+/* ─── Retro Terminal / Green Phosphor CRT ─── */
+
+.crt-root {
+  background: #0a0a0a;
+  font-family: 'VT323', 'Courier New', monospace;
+  color: #33ff00;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* ── CRT scanlines overlay ── */
+.crt-scanlines {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.15) 2px,
+    rgba(0, 0, 0, 0.15) 4px
+  );
+}
+
+/* ── CRT vignette (dark edges) ── */
+.crt-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 85% 80% at 50% 50%,
+    transparent 50%,
+    rgba(0, 0, 0, 0.5) 100%
+  );
+}
+
+/* ── CRT ambient glow ── */
+.crt-glow {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 60% 50% at 50% 50%,
+    rgba(51, 255, 0, 0.015) 0%,
+    transparent 70%
+  );
+}
+
+/* ── Phosphor text glow ── */
+.crt-text {
+  text-shadow: 0 0 4px rgba(51, 255, 0, 0.4);
+}
+
+.crt-text-dim {
+  color: #1a8a00;
+  text-shadow: 0 0 2px rgba(51, 255, 0, 0.15);
+}
+
+.crt-text-bright {
+  color: #66ff33;
+  text-shadow: 0 0 6px rgba(51, 255, 0, 0.5);
+}
+
+/* ── Top status bar ── */
+.crt-statusbar {
+  background: #0d0d0d;
+  border-bottom: 1px solid #1a3300;
+}
+
+/* ── Peer bar (toggleable) ── */
+.crt-peerbar {
+  background: #0d0d0d;
+  border-bottom: 1px solid #1a3300;
+}
+
+/* ── Message log ── */
+.crt-log-line {
+  animation: crt-type-in 0.08s ease-out both;
+}
+.crt-log-line:nth-last-child(1) { animation-delay: 0ms; }
+.crt-log-line:nth-last-child(2) { animation-delay: 15ms; }
+.crt-log-line:nth-last-child(3) { animation-delay: 30ms; }
+.crt-log-line:nth-last-child(4) { animation-delay: 45ms; }
+.crt-log-line:nth-last-child(5) { animation-delay: 60ms; }
+
+/* ── Input prompt ── */
+.crt-input {
+  background: transparent;
+  color: #33ff00;
+  border: none;
+  outline: none;
+  caret-color: #33ff00;
+  font-family: 'VT323', monospace;
+  text-shadow: 0 0 4px rgba(51, 255, 0, 0.4);
+}
+.crt-input::placeholder {
+  color: #1a4400;
+  text-shadow: none;
+}
+
+/* ── Blinking cursor block ── */
+.crt-cursor {
+  animation: crt-blink 1s step-end infinite;
+}
+
+/* ── Settings panel ── */
+.crt-settings {
+  background: #0a0a0a;
+}
+
+.crt-theme-row {
+  border: 1px solid #1a3300;
+  transition: all 0.1s;
+  cursor: pointer;
+}
+.crt-theme-row:hover {
+  border-color: #33ff00;
+  background: rgba(51, 255, 0, 0.03);
+}
+.crt-theme-row-active {
+  border-color: #33ff00 !important;
+  background: rgba(51, 255, 0, 0.05) !important;
+  box-shadow: 0 0 12px rgba(51, 255, 0, 0.05);
+}
+
+/* ── Peer list item ── */
+.crt-peer-row {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.crt-peer-row:hover {
+  background: rgba(51, 255, 0, 0.04);
+}
+.crt-peer-row-active {
+  background: rgba(51, 255, 0, 0.06);
+}
+
+/* ── Reaction buttons in log ── */
+.crt-reaction {
+  border: 1px solid #1a3300;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.crt-reaction:hover {
+  border-color: #33ff00;
+  background: rgba(51, 255, 0, 0.06);
+}
+
+/* ── Hover reactions ── */
+.crt-msg-actions {
+  opacity: 0;
+  transition: opacity 0.08s;
+}
+.group:hover .crt-msg-actions {
+  opacity: 1;
+}
+
+/* ── Scrollbar ── */
+.crt-root ::-webkit-scrollbar { width: 6px; height: 6px; }
+.crt-root ::-webkit-scrollbar-track { background: #0a0a0a; }
+.crt-root ::-webkit-scrollbar-thumb { background: #1a3300; }
+.crt-root ::-webkit-scrollbar-thumb:hover { background: #33ff00; }
+
+.crt-root ::selection {
+  background: rgba(51, 255, 0, 0.25);
+  color: #fff;
+}
+
+/* ── Keyframes ── */
+@keyframes crt-type-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes crt-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes crt-flicker {
+  0% { opacity: 0.98; }
+  5% { opacity: 1; }
+  10% { opacity: 0.97; }
+  15% { opacity: 1; }
+  100% { opacity: 1; }
+}
+
+/* Subtle screen flicker */
+.crt-screen {
+  animation: crt-flicker 4s ease-in-out infinite;
+}

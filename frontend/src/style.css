@@ -1,0 +1,168 @@
+@import "tailwindcss";
+
+/* ─── tailchat "Cipher Lounge" design tokens ─── */
+
+@theme {
+  /* Backgrounds — warm-shifted darks with depth */
+  --color-tc-base: #0a0a0f;
+  --color-tc-surface: #111116;
+  --color-tc-elevated: #18181f;
+  --color-tc-hover: #1e1e28;
+  --color-tc-active: #252530;
+
+  /* Borders — subtle separators */
+  --color-tc-border: #2a2a38;
+  --color-tc-border-subtle: #1a1a24;
+
+  /* Text — high contrast primary, layered secondaries */
+  --color-tc-text: #e8e8f0;
+  --color-tc-text-secondary: #7c7c96;
+  --color-tc-text-tertiary: #4a4a5e;
+
+  /* Accent — custom mint-green, crypto-terminal feel */
+  --color-tc-accent: #39ff9f;
+  --color-tc-accent-dim: #2bcc7f;
+  --color-tc-accent-muted: #1a7a4e;
+  --color-tc-accent-bg: oklch(0.80 0.20 160 / 0.07);
+  --color-tc-accent-border: oklch(0.80 0.20 160 / 0.18);
+
+  /* Semantic */
+  --color-tc-danger: #ff6b6b;
+  --color-tc-warning: #fbbf24;
+  --color-tc-info: #6cb4ff;
+  --color-tc-online: #39ff9f;
+  --color-tc-offline: #4a4a5e;
+
+  /* Messages — Slack-style flat rows, not bubbles */
+  --color-tc-msg-hover: #14141c;
+  --color-tc-msg-own-accent: oklch(0.80 0.20 160 / 0.15);
+  --color-tc-msg-other-accent: oklch(0.65 0.10 250 / 0.10);
+
+  /* Typography */
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* Sizing */
+  --sidebar-width: 272px;
+}
+
+/* ─── Base resets ─── */
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--color-tc-base);
+  color: var(--color-tc-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Noise texture overlay ─── */
+
+#root::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+/* Wails drag regions */
+.drag-region { --wails-draggable: drag; }
+input, button, textarea, select, a, [contenteditable] { --wails-draggable: no-drag; }
+
+/* ─── Scrollbar ─── */
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-tc-border); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-tc-text-tertiary); }
+
+::selection {
+  background: oklch(0.80 0.20 160 / 0.25);
+  color: #fff;
+}
+
+/* ─── Animations ─── */
+
+@keyframes slide-up {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes msg-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+/* ─── Message stagger ─── */
+
+.msg-row {
+  animation: msg-enter 0.25s ease-out both;
+}
+
+.msg-row:nth-child(1) { animation-delay: 0ms; }
+.msg-row:nth-child(2) { animation-delay: 40ms; }
+.msg-row:nth-child(3) { animation-delay: 80ms; }
+.msg-row:nth-child(4) { animation-delay: 120ms; }
+.msg-row:nth-child(5) { animation-delay: 160ms; }
+.msg-row:nth-child(6) { animation-delay: 200ms; }
+.msg-row:nth-child(7) { animation-delay: 240ms; }
+.msg-row:nth-child(8) { animation-delay: 280ms; }
+.msg-row:nth-child(9) { animation-delay: 320ms; }
+.msg-row:nth-child(10) { animation-delay: 360ms; }
+.msg-row:nth-child(n+11) { animation-delay: 400ms; }
+
+/* ─── View crossfade ─── */
+
+.view-enter {
+  animation: fade-in 0.15s ease-out;
+}
+
+/* ─── Peer item hover slide ─── */
+
+.peer-item {
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.peer-item:hover {
+  transform: translateX(2px);
+}
+
+/* ─── Message hover action bar ─── */
+
+.msg-actions {
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.msg-row:hover .msg-actions {
+  opacity: 1;
+}
