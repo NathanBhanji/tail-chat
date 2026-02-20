@@ -1,3 +1,18 @@
 /tailchat
+/giftest
 dist/
 .context/
+
+# Wails build output
+build/bin/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Screenshots (dev artifacts)
+*.png
+!build/appicon.png
+
+# OS
+.DS_Store

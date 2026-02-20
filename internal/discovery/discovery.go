@@ -37,9 +37,31 @@ type tailscalePeer struct {
 	UserID       int64    `json:"UserID"`
 }
 
+// tailscaleBin returns the path to the tailscale CLI binary.
+// On macOS, GUI apps don't inherit the shell PATH, so we check
+// common locations explicitly.
+func tailscaleBin() string {
+	// Try PATH first (works from terminal)
+	if p, err := exec.LookPath("tailscale"); err == nil {
+		return p
+	}
+	// macOS app bundle location
+	candidates := []string{
+		"/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+		"/usr/local/bin/tailscale",
+		"/opt/homebrew/bin/tailscale",
+	}
+	for _, c := range candidates {
+		if _, err := exec.LookPath(c); err == nil {
+			return c
+		}
+	}
+	return "tailscale" // fallback
+}
+
 // GetSelfIP returns this machine's Tailscale IP.
 func GetSelfIP() (string, string, error) {
-	out, err := exec.Command("tailscale", "status", "--json").Output()
+	out, err := exec.Command(tailscaleBin(), "status", "--json").Output()
 	if err != nil {
 		return "", "", fmt.Errorf("tailscale status: %w", err)
 	}
@@ -58,7 +80,7 @@ func GetSelfIP() (string, string, error) {
 
 // GetPeers returns all peers on the tailnet.
 func GetPeers() ([]Peer, error) {
-	out, err := exec.Command("tailscale", "status", "--json").Output()
+	out, err := exec.Command(tailscaleBin(), "status", "--json").Output()
 	if err != nil {
 		return nil, fmt.Errorf("tailscale status: %w", err)
 	}
