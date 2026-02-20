@@ -758,8 +758,12 @@ func TestRenderInlineImage_NotCached(t *testing.T) {
 	defer clearImageCache()
 
 	rendered, rows := renderInlineImage("http://example.com/uncached.gif", 40, 10)
-	if rendered != "" || rows != 0 {
-		t.Errorf("expected empty output for uncached image, got %d rows", rows)
+	// Should show loading placeholder instead of empty to prevent layout shift
+	if rows != gifInlineMaxRows {
+		t.Errorf("expected placeholder with %d rows, got %d", gifInlineMaxRows, rows)
+	}
+	if !strings.Contains(rendered, "loading") {
+		t.Error("expected loading placeholder text")
 	}
 }
 
@@ -811,8 +815,12 @@ func TestRenderInlineImage_NilImage(t *testing.T) {
 	setCachedImage("http://example.com/nil.gif", nil, nil)
 
 	rendered, rows := renderInlineImage("http://example.com/nil.gif", 40, 10)
-	if rendered != "" || rows != 0 {
-		t.Error("expected empty output for nil cached image")
+	// Nil cached image should show placeholder
+	if rows != gifInlineMaxRows {
+		t.Errorf("expected placeholder with %d rows for nil image, got %d", gifInlineMaxRows, rows)
+	}
+	if !strings.Contains(rendered, "loading") {
+		t.Error("expected loading placeholder text")
 	}
 }
 
@@ -844,8 +852,9 @@ func TestInlineImageLines_NotCached(t *testing.T) {
 	defer clearImageCache()
 
 	lines := inlineImageLines("http://example.com/none.gif", 40, 10)
-	if lines != 0 {
-		t.Errorf("expected 0 lines for uncached, got %d", lines)
+	// Should reserve space even before cached, to prevent layout shift
+	if lines != gifInlineMaxRows {
+		t.Errorf("expected %d reserved lines for uncached, got %d", gifInlineMaxRows, lines)
 	}
 }
 

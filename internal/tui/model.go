@@ -192,7 +192,7 @@ func tickCmd() tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, tickCmd())
+	return tea.Batch(textinput.Blink, tickCmd(), animTickCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -305,6 +305,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.Err.Error()
 		m.errExpiry = time.Now().Add(5 * time.Second)
 		return m, nil
+
+	case AnimTickMsg:
+		// Advance global animation frame counter for GIF playback
+		animTick++
+		return m, animTickCmd()
 
 	case TickMsg:
 		if m.err != "" && time.Now().After(m.errExpiry) {
