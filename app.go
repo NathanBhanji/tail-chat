@@ -196,6 +196,7 @@ type JSMessage struct {
 
 // GetMessages returns chat history for a given chat key.
 func (a *App) GetMessages(chatKey string) []JSMessage {
+	a.chatMgr.LoadMessages(chatKey)
 	msgs := a.chatMgr.GetMessages(chatKey)
 	result := make([]JSMessage, len(msgs))
 	for i, m := range msgs {

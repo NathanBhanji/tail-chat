@@ -6,6 +6,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 )
 
 //go:embed all:frontend
@@ -15,11 +16,12 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:     "TailChat",
-		Width:     480,
-		Height:    640,
-		MinWidth:  400,
-		MinHeight: 500,
+		Title:            "TailChat",
+		Width:            480,
+		Height:           640,
+		MinWidth:         400,
+		MinHeight:        500,
+		Frameless:        true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -28,6 +30,10 @@ func main() {
 		OnShutdown: app.shutdown,
 		Bind: []interface{}{
 			app,
+		},
+		Mac: &mac.Options{
+			WebviewIsTransparent: true,
+			WindowIsTranslucent:  false,
 		},
 	})
 	if err != nil {

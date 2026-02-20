@@ -8,6 +8,16 @@ let groups = [];
 let pendingInvites = [];
 let selfHostname = "";
 
+// ---- Window Controls (frameless) ----
+if (typeof runtime !== "undefined") {
+  document.querySelectorAll('.title-bar-controls button').forEach(function (btn) {
+    var label = btn.getAttribute("aria-label");
+    if (label === "Minimize") btn.addEventListener("click", function () { runtime.WindowMinimise(); });
+    if (label === "Maximize") btn.addEventListener("click", function () { runtime.WindowToggleMaximise(); });
+    if (label === "Close") btn.addEventListener("click", function () { runtime.Quit(); });
+  });
+}
+
 // ---- Theme ----
 const themes = {
   "98": { css: "themes/98.css", bg: "theme-98" },
@@ -84,7 +94,14 @@ function renderPeerList() {
   peers.forEach(function (peer) {
     if (peer.isSelf) return;
     var li = document.createElement("li");
-    li.className = "peer-item " + (peer.online ? "peer-online" : "peer-offline");
+    li.className = "peer-item";
+    if (!peer.online) {
+      li.className += " peer-offline";
+    } else if (peer.runningTailchat) {
+      li.className += " peer-tailchat";
+    } else {
+      li.className += " peer-online";
+    }
 
     var nameSpan = document.createElement("span");
     nameSpan.textContent = peer.hostname;
@@ -93,6 +110,9 @@ function renderPeerList() {
     var ipSpan = document.createElement("span");
     ipSpan.className = "peer-ip";
     ipSpan.textContent = peer.tailscaleIP;
+    if (peer.online && peer.runningTailchat) {
+      ipSpan.textContent += " \u2014 TailChat";
+    }
     li.appendChild(ipSpan);
 
     li.addEventListener("dblclick", function () {
@@ -109,6 +129,10 @@ function renderPeerList() {
 async function connectOrOpen(peer) {
   if (!peer.online) {
     showErrorDialog(peer.hostname + " is offline");
+    return;
+  }
+  if (!peer.runningTailchat) {
+    showErrorDialog(peer.hostname + " is not running TailChat");
     return;
   }
 
@@ -374,8 +398,9 @@ function hideErrorDialog() {
 
 // ---- Status Bar ----
 function updateStatusBar() {
+  var chatReady = peers.filter(function (p) { return p.online && !p.isSelf && p.runningTailchat; }).length;
   var online = peers.filter(function (p) { return p.online && !p.isSelf; }).length;
-  document.getElementById("status-peers").textContent = online + " peer" + (online !== 1 ? "s" : "");
+  document.getElementById("status-peers").textContent = chatReady + "/" + online + " peers";
 }
 
 // ---- Refresh ----
