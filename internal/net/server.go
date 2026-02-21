@@ -56,6 +56,7 @@ type Server struct {
 	onKeyWarning    func(hostname string, err error) // TOFU key change warning
 	resolveHostname HostnameResolver
 	stopCh          chan struct{}
+	stopOnce        sync.Once
 }
 
 // NewServer creates a TCP server bound to the given address.
@@ -301,7 +302,7 @@ func (s *Server) Connections() map[string]*Connection {
 
 // Stop shuts down the server.
 func (s *Server) Stop() {
-	close(s.stopCh)
+	s.stopOnce.Do(func() { close(s.stopCh) })
 	s.listener.Close()
 	s.mu.Lock()
 	for _, c := range s.conns {
