@@ -43,7 +43,7 @@ const SendMessage = api<(p: string, c: string) => Promise<void>>('SendMessage');
 const SendTyping = api<(k: string, t: boolean) => Promise<void>>('SendTyping');
 const SendReaction = api<(k: string, m: string, e: string) => Promise<void>>('SendReaction');
 const SendReadReceipts = api<(k: string) => Promise<void>>('SendReadReceipts');
-const ConnectToPeer = api<(ip: string) => Promise<void>>('ConnectToPeer');
+const ConnectToPeer = api<(ip: string, hostname: string) => Promise<void>>('ConnectToPeer');
 const IsConnected = api<(h: string) => Promise<boolean>>('IsConnected');
 const GetUnread = api<(k: string) => Promise<number>>('GetUnread');
 const ClearUnread = api<(k: string) => Promise<void>>('ClearUnread');
@@ -178,7 +178,7 @@ export default function App() {
     setMessages([]);
     setView('chat');
     if (!connected[peer.Hostname] && peer.RunningTailchat) {
-      try { await ConnectToPeer(peer.TailscaleIP); } catch { /* */ }
+      try { await ConnectToPeer(peer.TailscaleIP, peer.Hostname); } catch { /* */ }
     }
     await refreshMessages(peer.Hostname);
     ClearUnread(peer.Hostname);

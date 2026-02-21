@@ -14,7 +14,8 @@ const (
 )
 
 // Connect establishes an authenticated, encrypted connection to a peer.
-func Connect(addr string, kp *crypto.KeyPair, hostname string, knownKeys *crypto.KnownKeys) (*Connection, error) {
+// If expectedHost is non-empty, the peer's self-reported hostname is verified against it.
+func Connect(addr string, kp *crypto.KeyPair, hostname string, knownKeys *crypto.KnownKeys, expectedHost string) (*Connection, error) {
 	conn, err := net.DialTimeout("tcp", addr, DialTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
@@ -75,6 +76,12 @@ func Connect(addr string, kp *crypto.KeyPair, hostname string, knownKeys *crypto
 			conn.Close()
 			return nil, fmt.Errorf("TOFU key verification failed: %w", err)
 		}
+	}
+
+	// Verify the peer's hostname matches what we expected to connect to
+	if expectedHost != "" && peerHS.Hostname != expectedHost {
+		conn.Close()
+		return nil, fmt.Errorf("hostname mismatch: expected %q, got %q", expectedHost, peerHS.Hostname)
 	}
 
 	shared, err := crypto.SharedSecret(kp.PrivateKey, peerPub)
