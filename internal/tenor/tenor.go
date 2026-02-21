@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	defaultKey   = "AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCYQ"
 	baseURL      = "https://tenor.googleapis.com/v2"
 	defaultLimit = 9
 	mediaFilter  = "gif,tinygif,nanogif"
@@ -65,15 +64,12 @@ type mediaFormatObj struct {
 	Size int    `json:"size"`
 }
 
-// New creates a new Tenor API client. It uses the TAILCHAT_TENOR_KEY
-// environment variable if set, otherwise falls back to the default key.
+// New creates a new Tenor API client. Set the TAILCHAT_TENOR_KEY environment
+// variable to enable GIF search. If unset, the client is created with an empty
+// key and API calls will return errors.
 func New() *Client {
-	key := os.Getenv("TAILCHAT_TENOR_KEY")
-	if key == "" {
-		key = defaultKey
-	}
 	return &Client{
-		apiKey:     key,
+		apiKey:     os.Getenv("TAILCHAT_TENOR_KEY"),
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }

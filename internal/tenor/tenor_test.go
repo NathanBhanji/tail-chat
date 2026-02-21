@@ -61,11 +61,16 @@ func TestNew(t *testing.T) {
 	if c == nil {
 		t.Fatal("New() returned nil")
 	}
-	if c.apiKey == "" {
-		t.Error("expected non-empty API key")
-	}
 	if c.httpClient == nil {
 		t.Error("expected non-nil HTTP client")
+	}
+}
+
+func TestNewWithoutEnvKey(t *testing.T) {
+	t.Setenv("TAILCHAT_TENOR_KEY", "")
+	c := New()
+	if c.apiKey != "" {
+		t.Errorf("expected empty API key without env var, got %q", c.apiKey)
 	}
 }
 
