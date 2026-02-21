@@ -81,7 +81,11 @@ func (s *Store) SaveMessages(chatKey string, msgs []StoredMessage) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // LoadMessages loads messages for a chat key.
@@ -112,7 +116,11 @@ func (s *Store) SaveGroups(groups []StoredGroup) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // LoadGroups loads all groups.
