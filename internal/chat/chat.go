@@ -1115,9 +1115,9 @@ func (m *Manager) UpdateFileState(chatKey, msgID string, state FileState, errMsg
 	m.mu.Unlock()
 }
 
-func (m *Manager) ConnectToPeer(ip string) (*tcnet.Connection, error) {
+func (m *Manager) ConnectToPeer(ip, expectedHost string) (*tcnet.Connection, error) {
 	addr := fmt.Sprintf("%s:%d", ip, tcnet.DefaultPort)
-	conn, err := tcnet.Connect(addr, m.keyPair, m.hostname, m.knownKeys)
+	conn, err := tcnet.Connect(addr, m.keyPair, m.hostname, m.knownKeys, expectedHost)
 	if err != nil {
 		return nil, err
 	}
@@ -1145,7 +1145,7 @@ func (m *Manager) reconnectLoop() {
 					continue
 				}
 				addr := fmt.Sprintf("%s:%d", ip, tcnet.DefaultPort)
-				conn, err := tcnet.Connect(addr, m.keyPair, m.hostname, m.knownKeys)
+				conn, err := tcnet.Connect(addr, m.keyPair, m.hostname, m.knownKeys, hostname)
 				if err != nil {
 					continue
 				}

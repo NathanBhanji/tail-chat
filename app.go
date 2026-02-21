@@ -255,11 +255,12 @@ func (a *App) SendReadReceipts(chatKey string) {
 }
 
 // ConnectToPeer establishes a connection to a peer by IP.
-func (a *App) ConnectToPeer(ip string) error {
+// hostname is the expected Tailscale hostname for verification.
+func (a *App) ConnectToPeer(ip, hostname string) error {
 	if a.chatMgr == nil {
 		return fmt.Errorf("not ready")
 	}
-	_, err := a.chatMgr.ConnectToPeer(ip)
+	_, err := a.chatMgr.ConnectToPeer(ip, hostname)
 	return err
 }
 

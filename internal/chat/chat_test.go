@@ -44,7 +44,7 @@ func setupPair(t *testing.T) (alice *chat.Manager, bob *chat.Manager, cleanup fu
 	bob = chat.NewManager(srvB, kpB, "bob", nil, nil)
 
 	// Connect alice -> bob
-	conn, err := tcnet.Connect(srvB.Addr(), kpA, "alice", nil)
+	conn, err := tcnet.Connect(srvB.Addr(), kpA, "alice", nil, "")
 	if err != nil {
 		srvA.Stop()
 		srvB.Stop()
@@ -1072,7 +1072,7 @@ func setupPairWithStore(t *testing.T) (alice *chat.Manager, bob *chat.Manager, s
 	alice = chat.NewManager(srvA, kpA, "alice", store, nil)
 	bob = chat.NewManager(srvB, kpB, "bob", nil, nil)
 
-	conn, err := tcnet.Connect(srvB.Addr(), kpA, "alice", nil)
+	conn, err := tcnet.Connect(srvB.Addr(), kpA, "alice", nil, "")
 	if err != nil {
 		srvA.Stop()
 		srvB.Stop()
