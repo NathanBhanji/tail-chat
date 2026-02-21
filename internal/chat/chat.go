@@ -983,6 +983,9 @@ func (m *Manager) handleFileOffer(c *tcnet.Connection, env *protocol.Envelope) {
 		return
 	}
 
+	// Sanitize filename — peer-supplied, strip directory components to prevent path traversal
+	offer.Filename = filepath.Base(offer.Filename)
+
 	// Determine the chat key — use sender hostname for DMs
 	chatKey := c.PeerHostname
 	if strings.HasPrefix(offer.ChatKey, "group:") {
