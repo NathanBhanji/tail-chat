@@ -116,7 +116,6 @@ func (a *App) initBackend() error {
 	if err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
-	server.Start()
 	a.server = server
 
 	watcher := discovery.NewWatcher(10*time.Second, func(peers []discovery.Peer) {
@@ -178,6 +177,10 @@ func (a *App) initBackend() error {
 			"state":    state,
 		})
 	})
+
+	// Start accepting connections AFTER all callbacks are registered
+	// to prevent data races on partially-set callback fields.
+	server.Start()
 
 	return nil
 }
