@@ -62,14 +62,14 @@ func Load() *Config {
 
 // Save writes the config to disk.
 func Save(cfg *Config) error {
-	if err := os.MkdirAll(configDir(), 0o755); err != nil {
+	if err := os.MkdirAll(configDir(), 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath(), data, 0o644)
+	return os.WriteFile(configPath(), data, 0o600)
 }
 
 // ListThemes returns all installed themes (including "default").
