@@ -162,6 +162,7 @@ type Watcher struct {
 	selfHost string
 	interval time.Duration
 	stopCh   chan struct{}
+	stopOnce sync.Once
 	onChange func([]Peer)
 }
 
@@ -225,7 +226,7 @@ func (w *Watcher) loop() {
 
 // Stop stops the watcher.
 func (w *Watcher) Stop() {
-	close(w.stopCh)
+	w.stopOnce.Do(func() { close(w.stopCh) })
 }
 
 // Peers returns the current peer list.
