@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"io/fs"
+	"log"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -19,9 +20,12 @@ func main() {
 	app := NewApp()
 
 	// The embedded assets are under frontend/dist/. Sub into that.
-	distFS, _ := fs.Sub(assets, "frontend/dist")
+	distFS, err := fs.Sub(assets, "frontend/dist")
+	if err != nil {
+		log.Fatalf("failed to create sub filesystem: %v", err)
+	}
 
-	err := wails.Run(&options.App{
+	err = wails.Run(&options.App{
 		Title:     "tailchat",
 		Width:     960,
 		Height:    680,
