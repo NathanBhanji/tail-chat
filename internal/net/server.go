@@ -36,9 +36,12 @@ type Connection struct {
 }
 
 // WriteMessage writes a protocol envelope to the connection with proper serialization.
+// A 30-second write deadline prevents goroutine leaks when a peer is unresponsive.
 func (c *Connection) WriteMessage(env *protocol.Envelope) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	c.Conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	defer c.Conn.SetWriteDeadline(time.Time{})
 	return protocol.WriteMessage(c.Conn, env)
 }
 
