@@ -91,6 +91,12 @@ type fileTransfer struct {
 	received int64
 }
 
+// persistRequest is a request to persist messages for a chat key.
+type persistRequest struct {
+	chatKey string
+	msgs    []storage.StoredMessage
+}
+
 // Manager coordinates chat sessions, message encryption, and delivery.
 type Manager struct {
 	mu              sync.RWMutex
@@ -114,6 +120,9 @@ type Manager struct {
 	// TOFU key pinning
 	knownKeys *crypto.KnownKeys
 
+	// Serialized persistence
+	persistCh chan persistRequest
+
 	// Auto-reconnect
 	reconnectTargets map[string]string
 	reconnectStop    chan struct{}
@@ -136,6 +145,7 @@ func NewManager(server *tcnet.Server, kp *crypto.KeyPair, hostname string, store
 		activeTransfers:  make(map[string]*fileTransfer),
 		reconnectTargets: make(map[string]string),
 		reconnectStop:    make(chan struct{}),
+		persistCh:        make(chan persistRequest, 64),
 	}
 
 	server.OnMessage(m.handleMessage)
@@ -147,6 +157,7 @@ func NewManager(server *tcnet.Server, kp *crypto.KeyPair, hostname string, store
 	}
 
 	go m.reconnectLoop()
+	go m.persistWorker()
 
 	return m
 }
@@ -244,7 +255,18 @@ func (m *Manager) persistMessages(chatKey string) {
 		}
 		stored = append(stored, sm)
 	}
-	go m.store.SaveMessages(chatKey, stored)
+	select {
+	case m.persistCh <- persistRequest{chatKey: chatKey, msgs: stored}:
+	default:
+		// Channel full, persist synchronously to avoid data loss
+		m.store.SaveMessages(chatKey, stored)
+	}
+}
+
+func (m *Manager) persistWorker() {
+	for req := range m.persistCh {
+		m.store.SaveMessages(req.chatKey, req.msgs)
+	}
 }
 
 func (m *Manager) persistGroups() {
@@ -1160,6 +1182,7 @@ func (m *Manager) reconnectLoop() {
 func (m *Manager) Stop() {
 	m.stopOnce.Do(func() {
 		close(m.reconnectStop)
+		close(m.persistCh)
 	})
 }
 
