@@ -93,6 +93,11 @@ export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gifSearchRef = useRef<number | null>(null);
   const typingRef = useRef<number | null>(null);
+  const activePeerRef = useRef('');
+
+
+
+  useEffect(() => { activePeerRef.current = activePeer; }, [activePeer]);
 
   // ─── Data fetching ──────────────────────────────────────────────
 
@@ -130,15 +135,12 @@ export default function App() {
   }, [refreshPeers]);
 
   useEffect(() => {
-    let pollId: number | undefined;
-
     backendReady.then(() => {
-      // Listen for the event (covers case where backend finishes after JS loads)
       EventsOn('ready', handleReady);
       EventsOn('error', (msg: string) => setError(msg));
       EventsOn('peers:updated', (p: Peer[]) => setPeers(p || []));
       EventsOn('chat:message', (d: { chatKey: string }) => {
-        if (d.chatKey === activePeer) refreshMessages(activePeer);
+        if (d.chatKey === activePeerRef.current) refreshMessages(activePeerRef.current);
         refreshUnread(d.chatKey);
       });
       EventsOn('chat:typing', (d: { chatKey: string; isTyping: boolean }) => {
@@ -146,15 +148,14 @@ export default function App() {
       });
       EventsOn('chat:peerConnect', () => refreshPeers());
       EventsOn('chat:reaction', (d: { chatKey: string }) => {
-        if (d.chatKey === activePeer) refreshMessages(activePeer);
+        if (d.chatKey === activePeerRef.current) refreshMessages(activePeerRef.current);
       });
       EventsOn('chat:status', () => refreshPeers());
 
-      // Tell the Go backend all listeners are registered.
-      // The backend waits for this before emitting "ready".
       NotifyFrontendReady();
     });
-  }, [activePeer, handleReady]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!ready) return;
