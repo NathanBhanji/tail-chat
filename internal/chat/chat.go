@@ -393,19 +393,18 @@ func (m *Manager) handleChatMessage(c *tcnet.Connection, env *protocol.Envelope)
 	}
 }
 
-func (m *Manager) handleAck(_ *tcnet.Connection, env *protocol.Envelope) {
+func (m *Manager) handleAck(c *tcnet.Connection, env *protocol.Envelope) {
 	ack, err := protocol.Unwrap[protocol.Ack](env)
 	if err != nil {
 		return
 	}
 	m.mu.Lock()
-	for chatKey, msgs := range m.messages {
-		for i, msg := range msgs {
-			if msg.ID == ack.MessageID && msg.State < StateDelivered {
-				m.messages[chatKey][i].State = StateDelivered
-				m.persistMessages(chatKey)
-				break
-			}
+	chatKey := c.PeerHostname
+	for i, msg := range m.messages[chatKey] {
+		if msg.ID == ack.MessageID && msg.State < StateDelivered {
+			m.messages[chatKey][i].State = StateDelivered
+			m.persistMessages(chatKey)
+			break
 		}
 	}
 	m.mu.Unlock()
@@ -503,6 +502,13 @@ func (m *Manager) handleTyping(c *tcnet.Connection, env *protocol.Envelope) {
 		chatKey = typing.ChatKey
 	}
 	m.mu.Lock()
+	if strings.HasPrefix(chatKey, "group:") {
+		groupID := strings.TrimPrefix(chatKey, "group:")
+		if !m.isGroupMember(groupID, c.PeerHostname) {
+			m.mu.Unlock()
+			return
+		}
+	}
 	if typing.IsTyping {
 		m.typing[chatKey] = time.Now()
 	} else {
@@ -524,12 +530,19 @@ func (m *Manager) handleReaction(c *tcnet.Connection, env *protocol.Envelope) {
 	if strings.HasPrefix(reaction.ChatKey, "group:") {
 		chatKey = reaction.ChatKey
 	}
+	if strings.HasPrefix(chatKey, "group:") {
+		groupID := strings.TrimPrefix(chatKey, "group:")
+		if !m.isGroupMember(groupID, c.PeerHostname) {
+			m.mu.Unlock()
+			return
+		}
+	}
 	for i, msg := range m.messages[chatKey] {
 		if msg.ID == reaction.MessageID {
 			if reaction.Remove {
 				var kept []Reaction
 				for _, r := range m.messages[chatKey][i].Reactions {
-					if !(r.Emoji == reaction.Emoji && r.Sender == reaction.Sender) {
+					if !(r.Emoji == reaction.Emoji && r.Sender == c.PeerHostname) {
 						kept = append(kept, r)
 					}
 				}
@@ -537,7 +550,7 @@ func (m *Manager) handleReaction(c *tcnet.Connection, env *protocol.Envelope) {
 			} else {
 				m.messages[chatKey][i].Reactions = append(m.messages[chatKey][i].Reactions, Reaction{
 					Emoji:  reaction.Emoji,
-					Sender: reaction.Sender,
+					Sender: c.PeerHostname,
 				})
 			}
 			m.persistMessages(chatKey)
@@ -573,14 +586,36 @@ func (m *Manager) handleReadReceipt(c *tcnet.Connection, env *protocol.Envelope)
 	if strings.HasPrefix(receipt.ChatKey, "group:") {
 		chatKey = receipt.ChatKey
 	}
+	if strings.HasPrefix(chatKey, "group:") {
+		groupID := strings.TrimPrefix(chatKey, "group:")
+		if !m.isGroupMember(groupID, c.PeerHostname) {
+			m.mu.Unlock()
+			return
+		}
+	}
 	for i, msg := range m.messages[chatKey] {
-		if msg.ID == receipt.MessageID {
+		if msg.ID == receipt.MessageID && msg.IsOwn {
 			m.messages[chatKey][i].State = StateRead
 			m.persistMessages(chatKey)
 			break
 		}
 	}
 	m.mu.Unlock()
+}
+
+// isGroupMember checks if hostname is a member of the given group.
+// Caller must hold m.mu (read or write).
+func (m *Manager) isGroupMember(groupID, hostname string) bool {
+	g, ok := m.groups[groupID]
+	if !ok {
+		return false
+	}
+	for _, member := range g.Members {
+		if member == hostname {
+			return true
+		}
+	}
+	return false
 }
 
 // Public API
